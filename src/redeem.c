@@ -82,6 +82,7 @@ pkgx_redeem_status pkgx_redeem(const pkgx_redeem_req *req, const char *expected_
     char *resp = NULL;
     size_t resplen = 0;
     int trc = tx(ctx, reqbody, strlen(reqbody), &resp, &resplen);
+    explicit_bzero(reqbody, strlen(reqbody)); /* the request body carries the token */
     free(reqbody);
     if (trc != 0 || resp == NULL) {
         free(resp);
