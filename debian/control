@@ -1,0 +1,23 @@
+Source: pkgexec
+Section: admin
+Priority: optional
+Maintainer: Troy Hernandez <troy@cornball.ai>
+Build-Depends: debhelper-compat (= 13), libapt-pkg-dev, libjansson-dev, libssl-dev, pkg-config
+Standards-Version: 4.7.0
+Homepage: https://github.com/cornball-ai/pkgexec
+Rules-Requires-Root: no
+
+Package: pkgexec
+Architecture: any
+# Slice 1 installs no ELF (docs + corpus only); ${shlibs:Depends} returns with
+# the per-verb entrypoints in a later slice.
+Depends: ${misc:Depends}
+Description: privileged apt effector for the Runix mutation boundary (scaffold)
+ pkgexec is the privileged apt effector for Runix: per-verb libapt-pkg binaries
+ that commit apt package transactions under pkexec/polkit and a broker-issued
+ effect receipt.
+ .
+ This is the slice-1 scaffold and is deliberately incapable of mutation. It
+ carries the schema-1 plan-digest encoder (OpenSSL EVP), the strict stdin
+ request parser, and process-hygiene primitives, all tested; it ships no
+ mutation-capable entrypoint, no polkit policy, and takes no lock.

@@ -7,6 +7,14 @@
 # per-verb effector binaries + spike probes
 /runix-apt-*
 /pkgexec-probe
+# fuzzer (the seed corpus in fuzz/corpus/*.json is tracked)
+/fuzz-request
+crash-*
+leak-*
+timeout-*
+oom-*
+fuzz/corpus/*
+!fuzz/corpus/*.json
 # packaging
 *.deb
 *.buildinfo
