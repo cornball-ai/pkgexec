@@ -49,6 +49,8 @@ int main(void) {
     CHECK(pkgx_null_stdin() == 0, "null_stdin ok");
     char c;
     CHECK(read(STDIN_FILENO, &c, 1) == 0, "stdin now reads EOF (/dev/null)");
+    CHECK((fcntl(STDIN_FILENO, F_GETFD) & FD_CLOEXEC) == 0,
+          "stdin stays inheritable across exec (not cloexec)");
 
     /* --- env scrub: allowlist only, secrets gone --- */
     setenv("APT_CONFIG", "/evil.conf", 1);

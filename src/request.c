@@ -24,17 +24,22 @@ static int is_lc_hex(const char *s, size_t n) {
     return 1;
 }
 
-/* Broker correlation id: a bounded string over [0-9a-f-] (a minted counter,
- * dash, hex). Validated for injection safety (it is later stamped into apt's
- * transaction log), not for an exact broker-internal shape. */
+/* Broker correlation id: exactly 20 digits, '-', 16 lowercase hex. */
 static int cid_ok(const char *s) {
-    size_t n = strlen(s);
-    if (n < 16 || n > PKGX_CID_MAX) {
+    if (strlen(s) != 20 + 1 + 16) {
         return 0;
     }
-    for (size_t i = 0; i < n; i++) {
+    for (int i = 0; i < 20; i++) {
+        if (s[i] < '0' || s[i] > '9') {
+            return 0;
+        }
+    }
+    if (s[20] != '-') {
+        return 0;
+    }
+    for (int i = 21; i < 37; i++) {
         char c = s[i];
-        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || c == '-')) {
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
             return 0;
         }
     }
@@ -42,8 +47,8 @@ static int cid_ok(const char *s) {
 }
 
 /* Strict apt package name, optionally arch-qualified: a Debian package name
- * ([a-z0-9] then [a-z0-9+.-], >= 2 chars) with an optional ":<arch>" suffix
- * ([a-z0-9-]+). */
+ * ([a-z0-9] then [a-z0-9+.-], >= 2 chars) with an optional ":<arch>" suffix,
+ * where the arch is [a-z0-9] then [a-z0-9-] (no leading '-'). */
 static int name_ok(const char *s) {
     size_t n = strlen(s);
     if (n < 2 || n > PKGX_MAX_NAME) {
@@ -70,12 +75,29 @@ static int name_ok(const char *s) {
         }
         for (const char *p = arch; *p; p++) {
             char c = *p;
-            if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')) {
+            int first = (p == arch);
+            int ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                     (!first && c == '-'); /* no leading '-' in the arch */
+            if (!ok) {
                 return 0;
             }
         }
     }
     return 1;
+}
+
+/* A JSON string carrying no embedded NUL. An escaped NUL makes Jansson's
+ * reported byte length exceed the C-string length; reject that. Returns the
+ * value, or NULL. */
+static const char *str_clean(json_t *v) {
+    if (!json_is_string(v)) {
+        return NULL;
+    }
+    const char *s = json_string_value(v);
+    if (strlen(s) != json_string_length(v)) {
+        return NULL;
+    }
+    return s;
 }
 
 static int depth(const json_t *v) {
@@ -106,7 +128,6 @@ static int depth(const json_t *v) {
     return 0;
 }
 
-/* Per-verb package arity. -1 = unknown verb. */
 enum { ARITY_NONE, ARITY_ONE_PLUS, ARITY_ANY };
 static int verb_arity(const char *verb) {
     if (strcmp(verb, "apt.update") == 0 || strcmp(verb, "apt.configure") == 0) {
@@ -125,9 +146,19 @@ static int verb_arity(const char *verb) {
 
 /* ---- stdin read with cap + deadline ---------------------------------- */
 
-int pkgx_read_stdin(int fd, char **body, size_t *len, const char **errcode) {
+void pkgx_secure_wipe(void *p, size_t n) {
+    if (p != NULL) {
+        explicit_bzero(p, n);
+    }
+}
+
+int pkgx_read_stdin_deadline(int fd, char **body, size_t *len,
+                             const char **errcode, long deadline_ms) {
     struct timespec start;
-    clock_gettime(CLOCK_MONOTONIC, &start);
+    if (clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
+        *errcode = "io";
+        return -1;
+    }
     size_t cap = 4096, n = 0;
     char *buf = malloc(cap + 1);
     if (buf == NULL) {
@@ -136,10 +167,14 @@ int pkgx_read_stdin(int fd, char **body, size_t *len, const char **errcode) {
     }
     for (;;) {
         struct timespec now;
-        clock_gettime(CLOCK_MONOTONIC, &now);
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+            free(buf);
+            *errcode = "io";
+            return -1;
+        }
         long elapsed = (now.tv_sec - start.tv_sec) * 1000 +
                        (now.tv_nsec - start.tv_nsec) / 1000000;
-        long remaining = (long) PKGX_STDIN_DEADLINE_SEC * 1000 - elapsed;
+        long remaining = deadline_ms - elapsed;
         if (remaining <= 0) {
             free(buf);
             *errcode = "deadline";
@@ -199,6 +234,11 @@ int pkgx_read_stdin(int fd, char **body, size_t *len, const char **errcode) {
     return 0;
 }
 
+int pkgx_read_stdin(int fd, char **body, size_t *len, const char **errcode) {
+    return pkgx_read_stdin_deadline(fd, body, len, errcode,
+                                    (long) PKGX_STDIN_DEADLINE_SEC * 1000);
+}
+
 /* ---- parse ------------------------------------------------------------ */
 
 static const char *ALLOWED[] = {"effect_receipt", "correlation_id",
@@ -241,17 +281,17 @@ int pkgx_parse_request(const char *verb, const char *body, size_t len,
         }
     }
 
-    json_t *jr = json_object_get(root, "effect_receipt");
-    if (!json_is_string(jr) || !is_lc_hex(json_string_value(jr), PKGX_RECEIPT_HEXLEN)) {
+    const char *rcpt = str_clean(json_object_get(root, "effect_receipt"));
+    if (rcpt == NULL || !is_lc_hex(rcpt, PKGX_RECEIPT_HEXLEN)) {
         goto fail;
     }
-    memcpy(out->effect_receipt, json_string_value(jr), PKGX_RECEIPT_HEXLEN + 1);
+    memcpy(out->effect_receipt, rcpt, PKGX_RECEIPT_HEXLEN + 1);
 
-    json_t *jc = json_object_get(root, "correlation_id");
-    if (!json_is_string(jc) || !cid_ok(json_string_value(jc))) {
+    const char *cid = str_clean(json_object_get(root, "correlation_id"));
+    if (cid == NULL || !cid_ok(cid)) {
         goto fail;
     }
-    strcpy(out->correlation_id, json_string_value(jc));
+    strcpy(out->correlation_id, cid);
 
     json_t *jp = json_object_get(root, "plan_schema");
     if (!json_is_integer(jp) || json_integer_value(jp) != 1) {
@@ -282,15 +322,19 @@ int pkgx_parse_request(const char *verb, const char *body, size_t len,
     }
     out->packages = calloc(np ? np : 1, sizeof *out->packages);
     if (out->packages == NULL) {
-        ec = "schema_invalid";
         goto fail;
     }
     for (size_t i = 0; i < np; i++) {
-        json_t *e = json_array_get(jpk, i);
-        if (!json_is_string(e) || !name_ok(json_string_value(e))) {
+        const char *name = str_clean(json_array_get(jpk, i));
+        if (name == NULL || !name_ok(name)) {
             goto fail;
         }
-        out->packages[i] = strdup(json_string_value(e));
+        for (size_t j = 0; j < i; j++) { /* refuse duplicate requested packages */
+            if (strcmp(out->packages[j], name) == 0) {
+                goto fail;
+            }
+        }
+        out->packages[i] = strdup(name);
         if (out->packages[i] == NULL) {
             goto fail;
         }
@@ -308,13 +352,16 @@ fail:
 }
 
 void pkgx_request_free(pkgx_request *req) {
-    if (req == NULL || req->packages == NULL) {
+    if (req == NULL) {
         return;
     }
-    for (size_t i = 0; i < req->npackages; i++) {
-        free(req->packages[i]);
+    explicit_bzero(req->effect_receipt, sizeof req->effect_receipt);
+    if (req->packages != NULL) {
+        for (size_t i = 0; i < req->npackages; i++) {
+            free(req->packages[i]);
+        }
+        free(req->packages);
+        req->packages = NULL;
+        req->npackages = 0;
     }
-    free(req->packages);
-    req->packages = NULL;
-    req->npackages = 0;
 }

@@ -38,6 +38,15 @@ typedef struct {
  * *errcode set to "too_large", "deadline", or "io". */
 int pkgx_read_stdin(int fd, char **body, size_t *len, const char **errcode);
 
+/* As pkgx_read_stdin, with an explicit deadline in milliseconds — a test seam so
+ * the deadline can be exercised without adding real seconds to a run. */
+int pkgx_read_stdin_deadline(int fd, char **body, size_t *len,
+                             const char **errcode, long deadline_ms);
+
+/* Wipe `n` bytes at `p` so a secret (the raw request body carrying the receipt)
+ * does not linger in freed memory. A no-op on NULL. */
+void pkgx_secure_wipe(void *p, size_t n);
+
 /* Parse+validate `body` for `verb` (the entrypoint's compile-time verb, one of
  * the nine apt.* strings). Strict: rejects duplicate keys, trailing content,
  * unknown members, missing members, depth > PKGX_MAX_DEPTH, a receipt that is

@@ -28,7 +28,7 @@ SAN := -fsanitize=address,undefined -g
 PREFIX ?= /usr
 DOCDIR ?= $(PREFIX)/share/doc/pkgexec
 
-.PHONY: all check test-digest test-request test-harden fuzz probe clean install
+.PHONY: all check test-digest test-request test-harden test-exec-child fuzz probe clean install
 
 all: libpkgexec.a
 
@@ -38,7 +38,7 @@ libpkgexec.a: src/digest.c src/request.c src/harden.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(JSON_CFLAGS) $(CRYPTO_CFLAGS) -c $^
 	ar rcs $@ digest.o request.o harden.o
 
-check: test-digest test-request test-harden
+check: test-digest test-request test-harden test-exec-child
 
 # Schema-1 digest encoder vs the shared golden corpus (Jansson + libcrypto).
 test-digest: src/digest.c tests/test_digest.c
@@ -57,6 +57,11 @@ test-harden: src/harden.c tests/test_harden.c
 	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(SAN) $^ -o build-test-harden
 	./build-test-harden
 
+# Exec-child isolation: receipt/env/fd do not cross a fork+exec.
+test-exec-child: src/harden.c tests/test_exec_child.c
+	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(SAN) $^ -o build-test-exec-child
+	./build-test-exec-child
+
 # Request-parser fuzzing. Requires clang (libFuzzer): make fuzz CC=clang
 fuzz: fuzz/fuzz_request.c src/request.c
 	$(CC) $(CPPFLAGS) -std=c11 $(JSON_CFLAGS) \
@@ -71,7 +76,8 @@ probe: tools/probe.cc
 
 clean:
 	rm -f libpkgexec.a digest.o request.o harden.o build-test-digest \
-	    build-test-request build-test-harden fuzz-request pkgexec-probe
+	    build-test-request build-test-harden build-test-exec-child \
+	    fuzz-request pkgexec-probe
 
 # Slice 1 installs docs + the corpus only (no entrypoint yet), so the .deb has a
 # meaningful build/install smoke while remaining incapable of mutation.

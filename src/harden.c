@@ -2,6 +2,7 @@
 #include "harden.h"
 
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -16,9 +17,10 @@ int pkgx_read_pkexec_uid(uid_t *uid) {
             return -1;
         }
     }
+    errno = 0;
     char *end = NULL;
     unsigned long long v = strtoull(s, &end, 10);
-    if (end == s || *end != '\0') {
+    if (errno != 0 || end == s || *end != '\0') { /* errno catches overflow */
         return -1;
     }
     uid_t u = (uid_t) v;
@@ -70,7 +72,9 @@ int pkgx_cloexec_from(int lowest) {
 }
 
 int pkgx_null_stdin(void) {
-    int fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    /* Opened WITHOUT O_CLOEXEC: stdin must stay open across a child's exec (as
+     * /dev/null), not close on it. */
+    int fd = open("/dev/null", O_RDONLY);
     if (fd < 0) {
         return -1;
     }
@@ -80,6 +84,16 @@ int pkgx_null_stdin(void) {
             return -1;
         }
         close(fd);
+    }
+    /* Guarantee fd 0 is inheritable even when open() returned fd 0 directly
+     * (stdin had been closed), where dup2 never ran to clear a cloexec bit. */
+    int flags = fcntl(STDIN_FILENO, F_GETFD);
+    if (flags < 0) {
+        return -1;
+    }
+    if ((flags & FD_CLOEXEC) &&
+        fcntl(STDIN_FILENO, F_SETFD, flags & ~FD_CLOEXEC) < 0) {
+        return -1;
     }
     return 0;
 }

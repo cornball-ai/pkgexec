@@ -198,6 +198,71 @@ int main(void) {
     CHECK(pkgx_digest_hold("apt.hold", &badh, 1, hex, NULL, NULL) == -1,
           "comma in a package name is refused");
 
+    /* Domain validation: out-of-enum values fail closed, never a valid hash. */
+    pkgx_txn_record bad_action = {"nginx", "amd64", "frobnicate", "", "1.0", NULL, 0};
+    CHECK(pkgx_digest_pkg_txn("apt.install", &bad_action, 1, hex, NULL, NULL) == -1,
+          "unknown action refused");
+    const char *bad_flag[] = {"sparkly"};
+    pkgx_txn_record badf = {"nginx", "amd64", "install", "", "1.0", bad_flag, 1};
+    CHECK(pkgx_digest_pkg_txn("apt.install", &badf, 1, hex, NULL, NULL) == -1,
+          "unknown flag name refused");
+    const char *dup_flags[] = {"auto", "auto"};
+    pkgx_txn_record dupf = {"nginx", "amd64", "install", "", "1.0", dup_flags, 2};
+    CHECK(pkgx_digest_pkg_txn("apt.install", &dupf, 1, hex, NULL, NULL) == -1,
+          "duplicate flags refused");
+    pkgx_txn_record vgood = {"nginx", "amd64", "install", "", "1.0", NULL, 0};
+    CHECK(pkgx_digest_pkg_txn("apt.bogus", &vgood, 1, hex, NULL, NULL) == -1,
+          "unknown transaction verb refused");
+    pkgx_cfg_record badcfg = {"nginx", "amd64", "1.0", "running"};
+    CHECK(pkgx_digest_configure(&badcfg, 1, hex, NULL, NULL) == -1,
+          "unknown configure state refused");
+    pkgx_hold_record badhs = {"nginx", "install", "frozen"};
+    CHECK(pkgx_digest_hold("apt.hold", &badhs, 1, hex, NULL, NULL) == -1,
+          "unknown hold state refused");
+    pkgx_hold_record okh = {"nginx", "install", "hold"};
+    CHECK(pkgx_digest_hold("apt.install", &okh, 1, hex, NULL, NULL) == -1,
+          "unknown hold verb refused");
+    const char *ok_comp[] = {"main"};
+    const char *bad_key[] = {"evil"};
+    const char *some_val[] = {"x"};
+    pkgx_src_record badopt = {"http://x", "noble", ok_comp, 1, bad_key, some_val, 1};
+    CHECK(pkgx_digest_update(&badopt, 1, hex, NULL, NULL) == -1,
+          "unknown update option key refused");
+    const char *dup_key[] = {"trusted", "trusted"};
+    const char *dup_val[] = {"yes", "no"};
+    pkgx_src_record dupopt = {"http://x", "noble", ok_comp, 1, dup_key, dup_val, 2};
+    CHECK(pkgx_digest_update(&dupopt, 1, hex, NULL, NULL) == -1,
+          "duplicate update option key refused");
+    pkgx_txn_record badutf = {"ng\xff""inx", "amd64", "install", "", "1.0", NULL, 0};
+    CHECK(pkgx_digest_pkg_txn("apt.install", &badutf, 1, hex, NULL, NULL) == -1,
+          "invalid UTF-8 in a field refused");
+    {
+        size_t big = 5u * 1024u * 1024u;
+        char *huge = malloc(big + 1);
+        memset(huge, 'a', big);
+        huge[big] = '\0';
+        pkgx_txn_record over = {"nginx", "amd64", "install", "", huge, NULL, 0};
+        CHECK(pkgx_digest_pkg_txn("apt.install", &over, 1, hex, NULL, NULL) == -1,
+              "over-cap canonical size refused");
+        free(huge);
+    }
+
+    /* Canonical resource: bytewise sort, dedup-refused, empty is "". */
+    {
+        const char *t[] = {"nginx", "apache2", "curl"};
+        char *res = NULL;
+        CHECK(pkgx_resource(t, 3, &res) == 0 &&
+                  strcmp(res, "apache2,curl,nginx") == 0,
+              "resource sorts targets bytewise");
+        free(res);
+        res = NULL;
+        CHECK(pkgx_resource(NULL, 0, &res) == 0 && strcmp(res, "") == 0,
+              "empty resource is the empty string");
+        free(res);
+        const char *dup[] = {"nginx", "nginx"};
+        CHECK(pkgx_resource(dup, 2, &res) == -1, "resource refuses duplicate targets");
+    }
+
     json_decref(root);
     printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

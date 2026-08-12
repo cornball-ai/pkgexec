@@ -1,5 +1,5 @@
-/* Strict stdin-request parsing: per-verb schema, bounds, and the read cap.
- * Built against system Jansson with ASan/UBSan (see Makefile). */
+/* Strict stdin-request parsing: per-verb schema, bounds, CID grammar, and the
+ * read cap/deadline. Built against system Jansson with ASan/UBSan (see Makefile). */
 #include "../src/request.h"
 
 #include <stdio.h>
@@ -149,6 +149,24 @@ int main(void) {
         }
     }
 
+    /* --- exact CID grammar (20 digits, '-', 16 lc hex) --- */
+    BODY(R, "0000178638251216570-a061ec02cffe1b2b", "1", "[\"nginx\"]", "0"); /* 19 digits */
+    reject("apt.install", body, "schema_invalid", "cid with 19 digits refused");
+    BODY(R, "00001786382512165708-A061EC02CFFE1B2B", "1", "[\"nginx\"]", "0"); /* upper hex */
+    reject("apt.install", body, "schema_invalid", "cid with uppercase hex refused");
+    BODY(R, "00001786382512165708_a061ec02cffe1b2b", "1", "[\"nginx\"]", "0"); /* no dash */
+    reject("apt.install", body, "schema_invalid", "cid without the dash refused");
+
+    /* --- duplicate targets, arch leading dash, embedded NUL --- */
+    BODY(R, C, "1", "[\"nginx\",\"nginx\"]", "0");
+    reject("apt.install", body, "schema_invalid", "duplicate requested package refused");
+    BODY(R, C, "1", "[\"libc6:-amd64\"]", "0");
+    reject("apt.install", body, "schema_invalid", "leading dash in arch qualifier refused");
+    /* jansson rejects an escaped NUL (JSON_ALLOW_NUL is never set); str_clean is
+     * defence-in-depth behind it. */
+    BODY(R, C, "1", "[\"ng\\u0000inx\"]", "0");
+    reject("apt.install", body, "bad_json", "escaped NUL in a string refused");
+
     /* --- structural refusals --- */
     snprintf(body, sizeof body,
              "{\"effect_receipt\":\"%s\",\"correlation_id\":\"%s\","
@@ -213,6 +231,20 @@ int main(void) {
         CHECK(rc == -1 && strcmp(ec, "too_large") == 0, "read_stdin caps oversize");
         free(out);
         free(data);
+    }
+    /* deadline: a pipe whose writer stays open with no data trips the (short,
+     * injected) deadline rather than blocking. */
+    {
+        int pfd[2];
+        CHECK(pipe(pfd) == 0, "pipe for deadline test");
+        char *out = NULL;
+        size_t olen = 0;
+        const char *ec = "";
+        int rc = pkgx_read_stdin_deadline(pfd[0], &out, &olen, &ec, 50);
+        CHECK(rc == -1 && strcmp(ec, "deadline") == 0, "read_stdin honors the deadline");
+        free(out);
+        close(pfd[0]);
+        close(pfd[1]);
     }
 
     printf("%d checks, %d failures\n", checks, failures);

@@ -18,6 +18,10 @@
 #define PKGEXEC_PLAN_SCHEMA_V1 1
 #define PKGEXEC_DIGEST_HEX 64 /* lowercase hex SHA-256; +1 for the NUL */
 
+/* Hard cap on the canonical byte string, so buffer growth is overflow-safe and
+ * a pathological plan cannot exhaust memory. Real plans are far smaller. */
+#define PKGEXEC_DIGEST_MAX_CANON (4u * 1024u * 1024u)
+
 /* install/remove/purge/upgrade/dist_upgrade, over the whole resolved
  * transaction. NULL string fields are treated as empty. `flags` is drawn from
  * {hold,auto,essential,protected}; the encoder sorts and comma-joins them. */
@@ -66,5 +70,13 @@ int pkgx_digest_hold(const char *verb, const pkgx_hold_record *recs, size_t n,
 int pkgx_digest_update(const pkgx_src_record *recs, size_t n,
                        char out_hex[PKGEXEC_DIGEST_HEX + 1], unsigned char **canon,
                        size_t *canon_len);
+
+/* Canonical `resource` for a target-name request: the requested target names,
+ * bytewise-sorted, comma-joined, delimiter/UTF-8-validated, duplicates refused.
+ * The same rule the future R issue side must use, so issue and redeem agree.
+ * Returns 0 and a malloc'd string (caller frees; "" when n==0), or -1. The
+ * fixed-token resources (update = "", configure = "pending") are chosen by the
+ * caller, not this function. */
+int pkgx_resource(const char *const *targets, size_t n, char **out);
 
 #endif /* PKGEXEC_DIGEST_H */

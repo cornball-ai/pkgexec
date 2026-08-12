@@ -29,7 +29,7 @@ jobs:
       - name: Fuzz the request parser
         run: |
           make fuzz CC=clang
-          ./fuzz-request -runs=300000 -max_total_time=45 fuzz/corpus || true
+          ./fuzz-request -runs=300000 -max_total_time=45 fuzz/corpus
           ./fuzz-request -runs=300000 -max_total_time=45
 
   package:
