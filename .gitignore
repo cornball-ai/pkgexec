@@ -1,0 +1,17 @@
+# build artifacts
+*.o
+*.a
+*.so
+/build/
+/build-*/
+# per-verb effector binaries + spike probes
+/runix-apt-*
+/pkgexec-probe
+# packaging
+*.deb
+*.buildinfo
+*.changes
+debian/.debhelper/
+debian/files
+debian/*.substvars
+debian/tmp/
