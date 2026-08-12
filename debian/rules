@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+# Debian hardening (PIE, stack protector, FORTIFY, RELRO, ...) via
+# dpkg-buildflags, which the Makefile already consumes.
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@
+
+# dh_auto_build runs `make` (the hardened compile gate); run the sanitized
+# tests too. dh_auto_install runs `make install` (docs + corpus only).
+override_dh_auto_test:
+	$(MAKE) check

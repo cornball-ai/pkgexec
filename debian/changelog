@@ -1,0 +1,7 @@
+pkgexec (0.0.1) unstable; urgency=medium
+
+  * Slice 1 scaffold: schema-1 plan-digest encoder (OpenSSL EVP), strict stdin
+    request parsing, and process-hygiene primitives, with sanitized tests and a
+    read-only libapt-pkg API probe. No mutation-capable entrypoint.
+
+ -- Troy Hernandez <troy@cornball.ai>  Wed, 12 Aug 2026 12:00:00 +0000

@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang pkg-config \
+            libjansson-dev libssl-dev libapt-pkg-dev
+
+      - name: Tests (ASan/UBSan)
+        run: make check
+
+      - name: Hardened build gate
+        run: make clean && make all
+
+      - name: Read-only libapt-pkg API probe (step 0)
+        run: make probe && ./pkgexec-probe bash
+
+      - name: Fuzz the request parser
+        run: |
+          make fuzz CC=clang
+          ./fuzz-request -runs=300000 -max_total_time=45 fuzz/corpus
+          ./fuzz-request -runs=300000 -max_total_time=45
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential debhelper pkg-config \
+            libjansson-dev libssl-dev libapt-pkg-dev
+
+      - name: Build .deb
+        run: dpkg-buildpackage -us -uc -b
+
+      - name: Install / list / remove smoke
+        run: |
+          sudo dpkg -i ../pkgexec_*.deb
+          dpkg -L pkgexec
+          test -f /usr/share/doc/pkgexec/README.md
+          dpkg -L pkgexec | grep -q plan-digest-vectors   # .gz after dh_compress
+          sudo dpkg -r pkgexec

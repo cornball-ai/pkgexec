@@ -7,11 +7,22 @@
 # per-verb effector binaries + spike probes
 /runix-apt-*
 /pkgexec-probe
-# packaging
+# fuzzer (the seed corpus in fuzz/corpus/*.json is tracked)
+/fuzz-request
+crash-*
+leak-*
+timeout-*
+oom-*
+fuzz/corpus/*
+!fuzz/corpus/*.json
+# packaging (build outputs; debian/ sources stay tracked)
 *.deb
 *.buildinfo
 *.changes
-debian/.debhelper/
-debian/files
-debian/*.substvars
-debian/tmp/
+/debian/pkgexec/
+/debian/.debhelper/
+/debian/debhelper-build-stamp
+/debian/files
+/debian/*.substvars
+/debian/*.debhelper.log
+/debian/tmp/
