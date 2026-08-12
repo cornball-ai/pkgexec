@@ -15,6 +15,10 @@
 
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define PKGEXEC_PLAN_SCHEMA_V1 1
 #define PKGEXEC_DIGEST_HEX 64 /* lowercase hex SHA-256; +1 for the NUL */
 
@@ -78,5 +82,9 @@ int pkgx_digest_update(const pkgx_src_record *recs, size_t n,
  * fixed-token resources (update = "", configure = "pending") are chosen by the
  * caller, not this function. */
 int pkgx_resource(const char *const *targets, size_t n, char **out);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* PKGEXEC_DIGEST_H */

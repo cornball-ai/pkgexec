@@ -28,17 +28,20 @@ SAN := -fsanitize=address,undefined -g
 PREFIX ?= /usr
 DOCDIR ?= $(PREFIX)/share/doc/pkgexec
 
-.PHONY: all check test-digest test-request test-harden test-exec-child fuzz probe clean install
+.PHONY: all check test-digest test-request test-harden test-exec-child \
+        test-redeem test-policy test-plan fuzz probe plan clean install
 
 all: libpkgexec.a
 
 # The non-privileged production sources, compiled hardened into a static lib —
-# a compile gate (slice 1 ships no entrypoint yet).
-libpkgexec.a: src/digest.c src/request.c src/harden.c
+# a compile gate (no mutation-capable entrypoint yet).
+libpkgexec.a: src/digest.c src/request.c src/harden.c src/redeem.c src/policy.c \
+              src/plan.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(JSON_CFLAGS) $(CRYPTO_CFLAGS) -c $^
-	ar rcs $@ digest.o request.o harden.o
+	ar rcs $@ digest.o request.o harden.o redeem.o policy.o plan.o
 
-check: test-digest test-request test-harden test-exec-child
+check: test-digest test-request test-harden test-exec-child \
+       test-redeem test-policy test-plan
 
 # Schema-1 digest encoder vs the shared golden corpus (Jansson + libcrypto).
 test-digest: src/digest.c tests/test_digest.c
@@ -62,6 +65,23 @@ test-exec-child: src/harden.c tests/test_exec_child.c
 	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(SAN) $^ -o build-test-exec-child
 	./build-test-exec-child
 
+# Broker redeem client: strict reply validation + cid equality (fake transport).
+test-redeem: src/redeem.c tests/test_redeem.c
+	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(JSON_CFLAGS) $(SAN) \
+	    $^ -o build-test-redeem $(JSON_LIBS)
+	./build-test-redeem
+
+# Trusted-side policy enforcement over resolved records.
+test-policy: src/policy.c tests/test_policy.c
+	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(SAN) $^ -o build-test-policy
+	./build-test-policy
+
+# Non-committing plan step: policy -> resource -> digest -> redeem (fake transport).
+test-plan: src/plan.c src/policy.c src/redeem.c src/digest.c tests/test_plan.c
+	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(JSON_CFLAGS) $(CRYPTO_CFLAGS) $(SAN) \
+	    $^ -o build-test-plan $(JSON_LIBS) $(CRYPTO_LIBS)
+	./build-test-plan
+
 # Request-parser fuzzing. Requires clang (libFuzzer): make fuzz CC=clang
 fuzz: fuzz/fuzz_request.c src/request.c
 	$(CC) $(CPPFLAGS) -std=c11 $(JSON_CFLAGS) \
@@ -74,10 +94,19 @@ probe: tools/probe.cc
 	$(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 $(WARN) $< -o pkgexec-probe \
 	    $(LDFLAGS) -lapt-pkg
 
+# Locked libapt resolve diagnostic (slice 2). The C helpers are compiled as C
+# and linked with the C++ resolve via g++; runtime is VM-gated (needs root for
+# the lock), so CI builds it as the linkage proof and does not run it.
+plan: tools/plan.cc src/digest.c src/policy.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(CRYPTO_CFLAGS) -c src/digest.c src/policy.c
+	$(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 $(WARN) tools/plan.cc \
+	    digest.o policy.o -o pkgexec-plan $(LDFLAGS) -lapt-pkg $(CRYPTO_LIBS)
+
 clean:
-	rm -f libpkgexec.a digest.o request.o harden.o build-test-digest \
-	    build-test-request build-test-harden build-test-exec-child \
-	    fuzz-request pkgexec-probe
+	rm -f libpkgexec.a digest.o request.o harden.o redeem.o policy.o plan.o \
+	    build-test-digest build-test-request build-test-harden \
+	    build-test-exec-child build-test-redeem build-test-policy \
+	    build-test-plan fuzz-request pkgexec-probe pkgexec-plan
 
 # Slice 1 installs docs + the corpus only (no entrypoint yet), so the .deb has a
 # meaningful build/install smoke while remaining incapable of mutation.

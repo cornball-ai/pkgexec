@@ -27,6 +27,9 @@ jobs:
       - name: Read-only libapt-pkg API probe (step 0)
         run: make probe && ./pkgexec-probe bash
 
+      - name: Locked libapt resolve — link check (slice 2, not run in CI)
+        run: make plan   # compile+link only; runtime takes the dpkg lock (VM-gated)
+
       - name: Fuzz the request parser
         run: |
           make fuzz CC=clang
