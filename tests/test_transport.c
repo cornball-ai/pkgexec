@@ -420,9 +420,10 @@ int main(void) {
     CHECK(reap(pid) == 0, "redeem server saw the token-addressed request");
 
     /* best-effort cleanup of the socket files + dir */
-    const char *names[] = {"ok.sock",       "deny.sock",  "stall.sock",
-                           "badver.sock",   "toolarge.sock", "trunc.sock",
-                           "absent.sock",   "redeem.sock"};
+    const char *names[] = {"ok.sock",     "deny.sock",     "stall.sock",
+                           "close.sock",  "trickle.sock",  "badver.sock",
+                           "toolarge.sock", "trunc.sock",  "absent.sock",
+                           "redeem.sock"};
     for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
         snprintf(path, sizeof path, "%s/%s", dir, names[i]);
         unlink(path);
