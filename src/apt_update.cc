@@ -91,6 +91,15 @@ extern "C" pkgx_apt_status pkgx_apt_update_effect(
     }
     pkgx_apt_set_lock_timeout(lock_timeout_s);
 
+    /* v1: update is whole-source-list only. A nonempty resource_token would name
+     * a subset, but ListUpdate always refreshes the ENTIRE retained source list,
+     * so a subset request cannot be honored faithfully — reject it before locking
+     * (as targeted upgrades are rejected) until subset execution exists. */
+    if (resource_token != nullptr && resource_token[0] != '\0') {
+        *detail = "subset_unsupported";
+        return PKGX_APT_RESOLVE_FAILED;
+    }
+
     /* Update takes the lists lock, not the dpkg frontend lock (plan §4B).
      * ListUpdate acquires it internally, so probe it non-blocking first to
      * surface genuine contention as a retryable lock miss, then release: holding
@@ -111,6 +120,13 @@ extern "C" pkgx_apt_status pkgx_apt_update_effect(
         return PKGX_APT_INTERNAL;
     }
 
+    /* Fail the refresh on ANY source error, not just a total failure: a partial
+     * fetch failure otherwise leaves stale-but-readable indexes that would pass a
+     * plain readability check and look like success. With Error-Mode=any,
+     * ListUpdate returns false if any configured source fails, so a partial
+     * refresh is COMMIT_FAILED, not OK. */
+    _config->Set("APT::Update::Error-Mode", "any");
+
     /* Enumerate the configured sources into schema-1 source records. One record
      * per (uri, suite): its distinct components, and the identity-relevant
      * options. v1 binds signed-by (the security-critical keyring/fingerprint);
@@ -125,20 +141,53 @@ extern "C" pkgx_apt_status pkgx_apt_update_effect(
         SrcHolder h;
         h.uri = mi->GetURI();
         h.suite = mi->GetDist();
-        std::set<std::string> comps;
+        std::set<std::string> comps, arches;
         for (const IndexTarget &t : mi->GetIndexTargets()) {
             std::string comp = t.Option(IndexTarget::COMPONENT);
             if (!comp.empty()) {
                 comps.insert(comp);
             }
+            std::string arch = t.Option(IndexTarget::ARCHITECTURE);
+            if (!arch.empty()) {
+                arches.insert(arch);
+            }
         }
         for (const std::string &c : comps) {
             h.components.push_back(c);
         }
+        /* Options: the fixed identity key set {signed-by, architectures, trusted}
+         * (contract § Plan digest). architectures is the bytewise-sorted arch set
+         * joined by a single space — within the delimiter grammar (space is not
+         * US/RS/','/'='); trusted binds the explicit [trusted=yes|no] that
+         * overrides signature checks, distinct from computed IsTrusted(). Each key
+         * is emitted only when set; the digest encoder sorts the k=v list. */
         std::string signed_by = mi->GetSignedBy();
         if (!signed_by.empty()) {
             h.okeys.push_back("signed-by");
             h.ovals.push_back(signed_by);
+        }
+        if (!arches.empty()) {
+            std::string joined;
+            for (const std::string &a : arches) {
+                if (!joined.empty()) {
+                    joined += ' ';
+                }
+                joined += a;
+            }
+            h.okeys.push_back("architectures");
+            h.ovals.push_back(joined);
+        }
+        switch (mi->GetTrusted()) {
+        case metaIndex::TRI_YES:
+            h.okeys.push_back("trusted");
+            h.ovals.push_back("yes");
+            break;
+        case metaIndex::TRI_NO:
+            h.okeys.push_back("trusted");
+            h.ovals.push_back("no");
+            break;
+        default:
+            break; /* TRI_UNSET / TRI_DONTCARE: not explicitly set — omit */
         }
         holders.push_back(std::move(h));
     }

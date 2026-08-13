@@ -37,10 +37,10 @@
 namespace {
 
 /* The pending-configuration states `dpkg --configure --pending` acts on, and
- * their descriptor names. HalfInstalled (an interrupted unpack) is deliberately
- * excluded: --configure --pending does not configure it (it needs re-unpack), so
- * it is not part of the configure plan — though the post-commit scan still counts
- * it as broken if present. */
+ * their descriptor names. HalfInstalled (an interrupted unpack) is NOT one of
+ * them: --configure --pending cannot repair it (it needs re-unpack), so it is not
+ * a configure target — it is an observed blocker, handled before redemption as a
+ * pre-commit BROKEN refusal (below), never encoded into the configure descriptor. */
 const char *pending_state(unsigned char cur) {
     switch (cur) {
     case pkgCache::State::UnPacked:
@@ -72,8 +72,19 @@ extern "C" int configure_commit(void *ctx, const char *correlation_id) {
     (void) correlation_id; /* the shelled dpkg writes no apt history record to stamp */
     ConfigureCommitCtx *c = static_cast<ConfigureCommitCtx *>(ctx);
     c->entered = true;
+    /* Hand the inner dpkg database lock to the child (release it, keep the outer
+     * frontend lock held), as DoInstall does for A; otherwise the spawned dpkg
+     * blocks on the lock we still hold. If the hand-off fails, do not run dpkg. */
+    if (!_system->UnLockInner()) {
+        return -1;
+    }
     const char *argv[] = {c->dpkg.c_str(), "--configure", "--pending", nullptr};
     c->ran_ok = (pkgx_spawn_wait(argv, nullptr) == 0);
+    /* Re-take the inner lock under the still-held outer lock; a failure leaves the
+     * context inconsistent, so fail closed and let the caller reconcile. */
+    if (!_system->LockInner()) {
+        c->ran_ok = false;
+    }
     return c->ran_ok ? 0 : -1;
 }
 
@@ -108,9 +119,17 @@ extern "C" pkgx_apt_status pkgx_apt_configure_effect(
         return PKGX_APT_INTERNAL;
     }
 
-    /* Enumerate the pending-configuration set from the current dpkg states. */
+    /* Enumerate the pending-configuration set from the current dpkg states. A
+     * half-installed package (interrupted unpack) is unrepairable by configure:
+     * the system is already broken in a way this verb will not fix, so refuse
+     * with BROKEN before the receipt is spent — the caller must resolve the
+     * half-installed package first. */
     std::deque<CfgHolder> holders;
     for (pkgCache::PkgIterator P = c->PkgBegin(); !P.end(); ++P) {
+        if (P->CurrentState == pkgCache::State::HalfInstalled) {
+            *detail = P.Name();
+            return PKGX_APT_BROKEN;
+        }
         const char *state = pending_state(P->CurrentState);
         if (state == nullptr) {
             continue;

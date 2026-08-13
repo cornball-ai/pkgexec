@@ -71,8 +71,20 @@ extern "C" int hold_commit(void *ctx, const char *correlation_id) {
     (void) correlation_id; /* set-selections writes no dpkg history record to stamp */
     HoldCommitCtx *c = static_cast<HoldCommitCtx *>(ctx);
     c->entered = true;
+    /* Hand the inner dpkg database lock to the child: release it while keeping the
+     * outer frontend lock held (so no other apt frontend interleaves), exactly as
+     * DoInstall does for A. Without this, the spawned dpkg blocks on the lock we
+     * still hold. If the hand-off fails, do not run dpkg. */
+    if (!_system->UnLockInner()) {
+        return -1;
+    }
     const char *argv[] = {c->dpkg.c_str(), "--set-selections", nullptr};
     c->applied = (pkgx_spawn_wait(argv, c->payload->c_str()) == 0);
+    /* Re-take the inner lock under the still-held outer lock; a failure leaves the
+     * context inconsistent, so fail closed and let the caller reconcile. */
+    if (!_system->LockInner()) {
+        c->applied = false;
+    }
     return c->applied ? 0 : -1;
 }
 
@@ -149,6 +161,15 @@ extern "C" pkgx_apt_status pkgx_apt_hold_effect(
             return PKGX_APT_RESOLVE_FAILED;
         }
         const char *from_state = selection_word(P->SelectedState);
+        /* hold/unhold toggles between install and hold; a target selected for
+         * deinstall/purge (or unknown) is not a valid hold subject. Refuse it
+         * explicitly rather than letting it reach a digest whose state grammar is
+         * {hold, install} and fail there. */
+        if (std::strcmp(from_state, "install") != 0 &&
+            std::strcmp(from_state, "hold") != 0) {
+            *detail = targets[i];
+            return PKGX_APT_RESOLVE_FAILED;
+        }
         if (std::strcmp(from_state, to_state) == 0) {
             continue; /* no change for this target */
         }
