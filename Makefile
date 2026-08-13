@@ -147,10 +147,11 @@ probe: tools/probe.cc
 # Locked libapt resolve diagnostic (slice 2). The C helpers are compiled as C
 # and linked with the C++ resolve via g++; runtime is VM-gated (needs root for
 # the lock), so CI builds it as the linkage proof and does not run it.
-plan: tools/plan.cc src/digest.c src/policy.c
+plan: tools/plan.cc src/digest.c src/policy.c src/apt_common.cc
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(CRYPTO_CFLAGS) -c src/digest.c src/policy.c
 	$(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 $(WARN) tools/plan.cc \
-	    digest.o policy.o -o pkgexec-plan $(LDFLAGS) -lapt-pkg $(CRYPTO_LIBS)
+	    src/apt_common.cc digest.o policy.o -o pkgexec-plan $(LDFLAGS) \
+	    -lapt-pkg $(CRYPTO_LIBS)
 
 # Commit effectors (activation, all four mechanisms): the C core
 # (parse/policy/digest/redeem/gate/transport/spawn) linked with the C++ libapt
