@@ -33,7 +33,7 @@ DOCDIR ?= $(PREFIX)/share/doc/pkgexec
 .PHONY: all check test-digest test-request test-harden test-exec-child \
         test-redeem test-policy test-plan test-effect test-apt-outcome \
         test-spawn test-result test-rapt test-transport fuzz probe plan effect \
-        clean install
+        entrypoints clean install
 
 all: libpkgexec.a
 
@@ -175,6 +175,55 @@ effect: tools/effect.cc src/apt_common.cc src/apt_txn.cc src/apt_update.cc \
 	    transport.o harden.o apt_status.o spawn.o result.o \
 	    $(LDFLAGS) -lapt-pkg $(CRYPTO_LIBS) $(JSON_LIBS)
 
+# The C core + shared libapt scaffolding every entrypoint links. The per-verb
+# EFFECTOR object is added separately so each binary carries ONLY its own mutation
+# path — runix-apt-update contains no DoInstall, runix-apt-hold no configure, etc.
+ENTRY_CORE = digest.o policy.o plan.o effect.o redeem.o request.o transport.o \
+             harden.o apt_status.o spawn.o result.o apt_common.o
+
+# verb : family : binary-name — the nine per-verb builds. The family selects both
+# the preprocessor branch in entrypoint.c and the single effector object linked.
+ENTRY_SPECS = apt.install:TXN:runix-apt-install \
+              apt.remove:TXN:runix-apt-remove \
+              apt.purge:TXN:runix-apt-purge \
+              apt.upgrade:TXN:runix-apt-upgrade \
+              apt.dist_upgrade:TXN:runix-apt-dist-upgrade \
+              apt.update:UPDATE:runix-apt-update \
+              apt.hold:HOLD:runix-apt-hold \
+              apt.unhold:HOLD:runix-apt-unhold \
+              apt.configure:CONFIGURE:runix-apt-configure
+
+# The nine per-verb pkexec entrypoints (activation). Each compiles src/entrypoint.c
+# with its verb baked in as a compile-time constant (never read from argv) and its
+# family selected by the preprocessor, then links the C core + the ONE effector for
+# its family + libapt — so a low-risk binary does not even contain a high-risk verb's
+# code. Each is the target of one polkit action. Runtime is VM-only (root + the real
+# broker + the dpkg lock); CI builds this as the linkage proof for all nine.
+# Requires libapt-pkg-dev + libssl-dev + libjansson-dev.
+entrypoints:
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(JSON_CFLAGS) $(CRYPTO_CFLAGS) -c \
+	    src/digest.c src/policy.c src/plan.c src/effect.c src/redeem.c \
+	    src/request.c src/transport.c src/harden.c src/apt_status.c src/spawn.c \
+	    src/result.c
+	$(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 $(WARN) -c \
+	    src/apt_common.cc src/apt_txn.cc src/apt_update.cc src/apt_hold.cc \
+	    src/apt_configure.cc
+	@for spec in $(ENTRY_SPECS); do \
+	    verb=$${spec%%:*}; rest=$${spec#*:}; fam=$${rest%%:*}; bin=$${rest#*:}; \
+	    case $$fam in \
+	        TXN) eff=apt_txn.o;; UPDATE) eff=apt_update.o;; \
+	        HOLD) eff=apt_hold.o;; CONFIGURE) eff=apt_configure.o;; \
+	        *) echo "unknown family $$fam"; exit 1;; \
+	    esac; \
+	    echo "  ENTRY   $$bin ($$verb -> $$eff)"; \
+	    $(CC) $(CPPFLAGS) $(CFLAGS) $(WARN) $(JSON_CFLAGS) $(CRYPTO_CFLAGS) \
+	        -DPKGX_VERB=\"$$verb\" -DPKGX_FAMILY_$$fam \
+	        -c src/entrypoint.c -o entrypoint-$$bin.o || exit 1; \
+	    $(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 -o $$bin \
+	        entrypoint-$$bin.o $(ENTRY_CORE) $$eff \
+	        $(LDFLAGS) -lapt-pkg $(CRYPTO_LIBS) $(JSON_LIBS) || exit 1; \
+	done
+
 clean:
 	rm -f libpkgexec.a digest.o request.o harden.o redeem.o policy.o plan.o \
 	    effect.o transport.o spawn.o apt_status.o result.o apt_common.o \
@@ -184,7 +233,7 @@ clean:
 	    build-test-policy build-test-plan build-test-effect \
 	    build-test-apt-outcome build-test-spawn build-test-result \
 	    build-test-rapt build-test-transport fuzz-request pkgexec-probe \
-	    pkgexec-plan pkgexec-effect
+	    pkgexec-plan pkgexec-effect entrypoint-runix-apt-*.o runix-apt-*
 
 # Slice 1 installs docs + the corpus only (no entrypoint yet), so the .deb has a
 # meaningful build/install smoke while remaining incapable of mutation.
