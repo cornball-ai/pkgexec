@@ -14,6 +14,10 @@
 
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define PKGX_RECEIPT_HEXLEN 32   /* the 128-bit token as 32 lowercase hex */
 #define PKGX_CID_MAX 64
 #define PKGX_MAX_STDIN 65536     /* hard cap on the request bytes (64 KiB) */
@@ -65,5 +69,9 @@ int pkgx_parse_request(const char *verb, const char *body, size_t len,
                        pkgx_request *out, const char **errcode);
 
 void pkgx_request_free(pkgx_request *req);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* PKGEXEC_REQUEST_H */

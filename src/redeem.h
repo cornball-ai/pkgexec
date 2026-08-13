@@ -16,6 +16,10 @@
 #include <stddef.h>
 #include <sys/types.h> /* uid_t */
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define PKGX_CID_LEN 37 /* 20 digits, '-', 16 hex; +1 for the NUL */
 
 /* The redeem request (token-addressed; carries no correlation_id). */
@@ -50,5 +54,9 @@ typedef int (*pkgx_redeem_transport)(void *ctx, const char *req, size_t reqlen,
 pkgx_redeem_status pkgx_redeem(const pkgx_redeem_req *req, const char *expected_cid,
                                pkgx_redeem_transport tx, void *ctx,
                                char out_cid[PKGX_CID_LEN + 1], const char **code);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* PKGEXEC_REDEEM_H */

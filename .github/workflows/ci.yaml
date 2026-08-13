@@ -40,6 +40,9 @@ jobs:
       - name: Locked libapt resolve — link check (slice 2, not run in CI)
         run: make plan   # compile+link only; runtime takes the dpkg lock (VM-gated)
 
+      - name: Package-transaction commit effector — link check (not run in CI)
+        run: make effect  # compile+link only; commits require root+broker (VM-gated)
+
       - name: Fuzz the request parser
         run: |
           make fuzz CC=clang

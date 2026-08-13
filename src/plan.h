@@ -15,6 +15,10 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef enum {
     PKGX_PLAN_OK = 0,      /* policy passed, receipt redeemed: a commit would follow */
     PKGX_PLAN_NO_OP,       /* empty resolved transaction: no effect, receipt unspent */
@@ -69,5 +73,9 @@ pkgx_plan_result pkgx_plan_and_redeem_configure(
     uid_t principal_uid, int plan_schema, const char *expected_cid,
     pkgx_redeem_transport tx, void *ctx, char out_cid[PKGX_CID_LEN + 1],
     const char **detail);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* PKGEXEC_PLAN_H */
