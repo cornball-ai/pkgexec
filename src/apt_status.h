@@ -35,9 +35,36 @@ typedef enum {
  *   broken            — post-effect dpkg ground truth has broken packages
  *                       (meaningful only once execution_began).
  * Distinguishes a pre-effect failure (nothing applied) from a dpkg run that
- * left the system broken, and only trusts `broken` after execution began. */
+ * left the system broken, and only trusts `broken` after execution began.
+ *
+ * Configure (D) reuses this: its commit is a single dpkg --configure --pending
+ * with no fetch phase, so execution_began == committer_entered, committed_ok is
+ * dpkg's exit, and broken is the shared incomplete-state scan — the same OK /
+ * COMMIT_FAILED / BROKEN distinction, over configure's own ground truth. */
 pkgx_apt_status pkgx_txn_classify(int committer_entered, int execution_began,
                                   int committed_ok, int broken);
+
+/* Classify an update (list-refresh) outcome — its OWN ground truth, not A's dpkg
+ * scan (update runs no dpkg and can never leave the database broken):
+ *   committer_entered — the gate admitted the refresh (validated redeem_ok);
+ *   refresh_ok        — ListUpdate() reported success;
+ *   indexes_readable  — a fresh cache re-opened over the refreshed indexes.
+ * OK iff the refresh succeeded AND the new indexes read back; a failed or partial
+ * refresh that still leaves the previous indexes usable is COMMIT_FAILED
+ * (operation failed, host consistent), never BROKEN. */
+pkgx_apt_status pkgx_update_classify(int committer_entered, int refresh_ok,
+                                     int indexes_readable);
+
+/* Classify a hold/unhold (selection-state) outcome — its OWN ground truth, the
+ * dpkg selection read back after the write (not A's dpkg scan; a selection change
+ * runs no maintainer scripts and cannot leave the database broken):
+ *   committer_entered  — the gate admitted the write (validated redeem_ok);
+ *   selection_applied  — dpkg --set-selections exited 0;
+ *   selection_matches  — every changed target reads back in the intended state.
+ * OK iff the write succeeded AND the read-back confirms it; otherwise
+ * COMMIT_FAILED (operation failed, prior selections intact), never BROKEN. */
+pkgx_apt_status pkgx_hold_classify(int committer_entered, int selection_applied,
+                                   int selection_matches);
 
 #ifdef __cplusplus
 }

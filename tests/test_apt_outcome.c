@@ -46,6 +46,47 @@ int main(void) {
     CHECK(pkgx_txn_classify(1, 1, 0, 0) == PKGX_APT_COMMIT_FAILED,
           "dpkg failed, db consistent -> COMMIT_FAILED");
 
+    /* --- update (B): entered, refresh_ok, indexes_readable. Its own ground
+     * truth — no dpkg, so it can never be BROKEN. --- */
+
+    /* gate refused an OK plan: internal, nothing refreshed. */
+    CHECK(pkgx_update_classify(0, 0, 0) == PKGX_APT_INTERNAL,
+          "update: committer never entered -> INTERNAL");
+    /* a stale refresh/readable flag must not be trusted if the gate refused. */
+    CHECK(pkgx_update_classify(0, 1, 1) == PKGX_APT_INTERNAL,
+          "update: not entered, flags ignored -> INTERNAL");
+    /* refreshed and the new indexes read back. */
+    CHECK(pkgx_update_classify(1, 1, 1) == PKGX_APT_OK,
+          "update: refreshed + readable -> OK");
+    /* ListUpdate failed: previous indexes stand, operation did not complete. */
+    CHECK(pkgx_update_classify(1, 0, 1) == PKGX_APT_COMMIT_FAILED,
+          "update: refresh failed -> COMMIT_FAILED");
+    /* refreshed but the rebuilt indexes will not open: not a success. */
+    CHECK(pkgx_update_classify(1, 1, 0) == PKGX_APT_COMMIT_FAILED,
+          "update: refreshed but indexes unreadable -> COMMIT_FAILED");
+    CHECK(pkgx_update_classify(1, 0, 0) == PKGX_APT_COMMIT_FAILED,
+          "update: refresh failed and unreadable -> COMMIT_FAILED");
+
+    /* --- hold/unhold (C): entered, selection_applied, selection_matches. Its own
+     * ground truth — a selection write runs no scripts, so never BROKEN. --- */
+
+    /* gate refused an OK plan: internal, no selection written. */
+    CHECK(pkgx_hold_classify(0, 0, 0) == PKGX_APT_INTERNAL,
+          "hold: committer never entered -> INTERNAL");
+    CHECK(pkgx_hold_classify(0, 1, 1) == PKGX_APT_INTERNAL,
+          "hold: not entered, flags ignored -> INTERNAL");
+    /* set-selections succeeded and the read-back confirms the intended state. */
+    CHECK(pkgx_hold_classify(1, 1, 1) == PKGX_APT_OK,
+          "hold: applied + read-back matches -> OK");
+    /* set-selections failed: prior selections intact, operation did not complete. */
+    CHECK(pkgx_hold_classify(1, 0, 1) == PKGX_APT_COMMIT_FAILED,
+          "hold: set-selections failed -> COMMIT_FAILED");
+    /* applied but the read-back disagrees: not a trustworthy success. */
+    CHECK(pkgx_hold_classify(1, 1, 0) == PKGX_APT_COMMIT_FAILED,
+          "hold: applied but read-back mismatch -> COMMIT_FAILED");
+    CHECK(pkgx_hold_classify(1, 0, 0) == PKGX_APT_COMMIT_FAILED,
+          "hold: failed and mismatched -> COMMIT_FAILED");
+
     printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

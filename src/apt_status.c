@@ -25,3 +25,31 @@ pkgx_apt_status pkgx_txn_classify(int committer_entered, int execution_began,
      * script failed and unwound cleanly). */
     return PKGX_APT_COMMIT_FAILED;
 }
+
+pkgx_apt_status pkgx_update_classify(int committer_entered, int refresh_ok,
+                                     int indexes_readable) {
+    if (!committer_entered) {
+        return PKGX_APT_INTERNAL; /* gate refused an OK plan: see pkgx_txn_classify */
+    }
+    if (refresh_ok && indexes_readable) {
+        return PKGX_APT_OK;
+    }
+    /* The refresh failed, or the rebuilt indexes will not read back. No dpkg ran,
+     * so nothing is broken — the previous indexes remain usable; the operation
+     * simply did not complete. */
+    return PKGX_APT_COMMIT_FAILED;
+}
+
+pkgx_apt_status pkgx_hold_classify(int committer_entered, int selection_applied,
+                                   int selection_matches) {
+    if (!committer_entered) {
+        return PKGX_APT_INTERNAL; /* gate refused an OK plan: see pkgx_txn_classify */
+    }
+    if (selection_applied && selection_matches) {
+        return PKGX_APT_OK;
+    }
+    /* dpkg --set-selections failed, or the read-back does not show the intended
+     * state. A selection write runs no maintainer scripts, so the database is
+     * never left broken; the prior selections stand. */
+    return PKGX_APT_COMMIT_FAILED;
+}

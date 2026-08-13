@@ -50,6 +50,19 @@ public:
     }
 };
 
+/* dpkg ground truth after a commit: open a FRESH cache (the pre-commit dep cache
+ * is stale) and report whether any package is left incomplete — unsatisfied
+ * dependencies (pkgDepCache::BrokenCount) OR an incomplete dpkg state
+ * (PkgIterator::State() != NeedsNothing, which covers unpacked / half-configured
+ * / half-installed / triggers-pending-or-awaited / reinstall-required, the states
+ * a failed maintainer script leaves with dependencies still satisfied). The fresh
+ * read is isolated from any pre-existing libapt error stack, and an unreadable
+ * cache is reported as broken (fail-safe: a caller that must reconcile treats the
+ * unverifiable as the worse case). Shared by the transaction (A) and configure
+ * (D) effectors — the two mechanisms whose commit runs dpkg and can leave the
+ * database half-applied. */
+bool pkgx_apt_ground_truth_broken();
+
 /* The hold and configure committers drive dpkg through pkgx_spawn_wait (spawn.h). */
 
 #endif /* PKGEXEC_APT_COMMON_HH */

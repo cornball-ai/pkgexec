@@ -3,6 +3,7 @@
 
 #include <apt-pkg/configuration.h>
 #include <apt-pkg/depcache.h>
+#include <apt-pkg/error.h>
 #include <apt-pkg/init.h>
 #include <apt-pkg/pkgcache.h>
 #include <apt-pkg/pkgsystem.h>
@@ -89,4 +90,31 @@ void pkgx_apt_map_txn(pkgCache *cache, pkgDepCache *dc,
         r.nflags = h.flagp.size();
         recs.push_back(r);
     }
+}
+
+bool pkgx_apt_ground_truth_broken() {
+    /* Isolate the fresh read from whatever the transaction left on the global
+     * error stack, so neither the open nor the scan inherits stale messages. */
+    _error->PushToStack();
+    bool bad = true; /* fail-safe: if we cannot verify, treat it as broken */
+    pkgCacheFile fresh;
+    if (fresh.Open(nullptr, false)) {
+        pkgCache *pc = fresh.GetPkgCache();
+        pkgDepCache *fdc = fresh.GetDepCache();
+        if (pc != nullptr && fdc != nullptr) {
+            /* BrokenCount only sees unsatisfied dependencies. A failed maintainer
+             * script can leave a package unpacked / half-configured / half-
+             * installed / triggers-pending-or-awaited, or reinstall-required, with
+             * its dependencies satisfied — PkgIterator::State() != NeedsNothing
+             * catches every such incomplete package. */
+            bad = (fdc->BrokenCount() != 0);
+            for (pkgCache::PkgIterator P = pc->PkgBegin(); !bad && !P.end(); ++P) {
+                if (P.State() != pkgCache::PkgIterator::NeedsNothing) {
+                    bad = true;
+                }
+            }
+        }
+    }
+    _error->RevertToStack(); /* drop the fresh read's errors; restore the prior */
+    return bad;
 }

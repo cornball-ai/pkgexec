@@ -97,36 +97,10 @@ extern "C" int txn_commit(void *ctx, const char *correlation_id) {
     return c->committed_ok ? 0 : -1;
 }
 
-/* dpkg ground truth after the transaction: re-read a fresh cache (the pre-commit
- * dep cache is stale) and report whether the system is left in any incomplete
- * state. If it cannot be read, assume broken — the safe reading for a caller
- * that must reconcile. */
-bool ground_truth_broken() {
-    /* Isolate the fresh read from whatever the transaction left on the global
-     * error stack, so neither the open nor the scan inherits stale messages. */
-    _error->PushToStack();
-    bool bad = true; /* fail-safe: if we cannot verify, treat it as broken */
-    pkgCacheFile fresh;
-    if (fresh.Open(nullptr, false)) {
-        pkgCache *pc = fresh.GetPkgCache();
-        pkgDepCache *fdc = fresh.GetDepCache();
-        if (pc != nullptr && fdc != nullptr) {
-            /* BrokenCount only sees unsatisfied dependencies. A failed maintainer
-             * script can leave a package unpacked / half-configured / half-
-             * installed / triggers-pending-or-awaited, or reinstall-required,
-             * with its dependencies satisfied — PkgIterator::State() !=
-             * NeedsNothing catches every such incomplete package. */
-            bad = (fdc->BrokenCount() != 0);
-            for (pkgCache::PkgIterator P = pc->PkgBegin(); !bad && !P.end(); ++P) {
-                if (P.State() != pkgCache::PkgIterator::NeedsNothing) {
-                    bad = true;
-                }
-            }
-        }
-    }
-    _error->RevertToStack(); /* drop the fresh read's errors; restore the prior */
-    return bad;
-}
+/* dpkg ground truth after the transaction is the shared fresh-cache scan
+ * (apt_common: pkgx_apt_ground_truth_broken) — the pre-commit dep cache is stale,
+ * so the true post-effect state is read from a fresh cache. Configure (D) reads
+ * the same scan; A and D are the two dpkg-running mechanisms. */
 
 } /* namespace */
 
@@ -241,7 +215,7 @@ extern "C" pkgx_apt_status pkgx_apt_txn_effect(
      * once execution actually began (else the fresh read reflects no change). */
     int broken = 0;
     if (cc.execution_began) {
-        broken = ground_truth_broken() ? 1 : 0;
+        broken = pkgx_apt_ground_truth_broken() ? 1 : 0;
     }
     pkgx_apt_status st = pkgx_txn_classify(cc.entered, cc.execution_began,
                                            cc.committed_ok, broken);

@@ -139,29 +139,35 @@ plan: tools/plan.cc src/digest.c src/policy.c
 	$(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 $(WARN) tools/plan.cc \
 	    digest.o policy.o -o pkgexec-plan $(LDFLAGS) -lapt-pkg $(CRYPTO_LIBS)
 
-# Package-transaction commit effector (activation, mechanism A): the C core
-# (parse/policy/digest/redeem/gate/transport) linked with the C++ libapt commit
-# path (GetArchives/DoInstall) via g++. Runtime is VM-only (root + the real
-# broker + the dpkg lock); CI builds this as the mutation-path linkage proof and
-# does not run it. Requires libapt-pkg-dev + libssl-dev + libjansson-dev.
-effect: tools/effect.cc src/apt_common.cc src/apt_txn.cc src/digest.c \
-        src/policy.c src/plan.c src/effect.c src/redeem.c src/request.c \
-        src/transport.c src/harden.c src/apt_status.c
+# Commit effectors (activation, all four mechanisms): the C core
+# (parse/policy/digest/redeem/gate/transport/spawn) linked with the C++ libapt
+# commit paths via g++ — A transactions (GetArchives/DoInstall), B update
+# (ListUpdate), C hold/unhold and D configure (dpkg via the spawn helper). Runtime
+# is VM-only (root + the real broker + the dpkg lock); CI builds this as the
+# mutation-path linkage proof and does not run it. Requires libapt-pkg-dev +
+# libssl-dev + libjansson-dev.
+effect: tools/effect.cc src/apt_common.cc src/apt_txn.cc src/apt_update.cc \
+        src/apt_hold.cc src/apt_configure.cc src/digest.c src/policy.c \
+        src/plan.c src/effect.c src/redeem.c src/request.c src/transport.c \
+        src/harden.c src/apt_status.c src/spawn.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(JSON_CFLAGS) $(CRYPTO_CFLAGS) -c \
 	    src/digest.c src/policy.c src/plan.c src/effect.c src/redeem.c \
-	    src/request.c src/transport.c src/harden.c src/apt_status.c
+	    src/request.c src/transport.c src/harden.c src/apt_status.c src/spawn.c
 	$(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 $(WARN) -c \
-	    src/apt_common.cc src/apt_txn.cc
+	    src/apt_common.cc src/apt_txn.cc src/apt_update.cc src/apt_hold.cc \
+	    src/apt_configure.cc
 	$(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 $(WARN) -c tools/effect.cc \
 	    -o effect_diag.o
 	$(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 -o pkgexec-effect \
-	    effect_diag.o apt_common.o apt_txn.o digest.o policy.o plan.o effect.o \
-	    redeem.o request.o transport.o harden.o apt_status.o \
+	    effect_diag.o apt_common.o apt_txn.o apt_update.o apt_hold.o \
+	    apt_configure.o digest.o policy.o plan.o effect.o redeem.o request.o \
+	    transport.o harden.o apt_status.o spawn.o \
 	    $(LDFLAGS) -lapt-pkg $(CRYPTO_LIBS) $(JSON_LIBS)
 
 clean:
 	rm -f libpkgexec.a digest.o request.o harden.o redeem.o policy.o plan.o \
 	    effect.o transport.o spawn.o apt_status.o apt_common.o apt_txn.o \
+	    apt_update.o apt_hold.o apt_configure.o \
 	    effect_diag.o build-test-digest build-test-request \
 	    build-test-harden build-test-exec-child build-test-redeem \
 	    build-test-policy build-test-plan build-test-effect \

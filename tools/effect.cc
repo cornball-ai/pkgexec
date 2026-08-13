@@ -1,16 +1,19 @@
-/* VM-only committing diagnostic for the package-transaction effector — a faithful
- * preview of the stage-3 per-verb entrypoint, without the pkexec/polkit wrapper
+/* VM-only committing diagnostic for the four commit effectors — a faithful
+ * preview of the stage-3 per-verb entrypoints, without the pkexec/polkit wrapper
  * or installation. It reads PKEXEC_UID, parses the real stdin request, scrubs the
- * environment, nulls stdin, closes inherited fds, then drives
- * pkgx_apt_txn_effect over the authenticated broker transport and prints the
- * outcome. It is NOT installed and it commits nothing without a real redeem_ok:
- * it needs root, the real broker socket, and a valid receipt on stdin, so it runs
- * only on a disposable VM. CI compiles+links it as the mutation-path proof.
+ * environment, nulls stdin, closes inherited fds, then dispatches on the verb to
+ * the matching effector (A transactions / B update / C hold-unhold / D configure)
+ * over the authenticated broker transport and prints the outcome. It is NOT
+ * installed and it commits nothing without a real redeem_ok: it needs root, the
+ * real broker socket, and a valid receipt on stdin, so it runs only on a
+ * disposable VM. CI compiles+links it as the mutation-path proof.
  *
  *   make effect
  *   printf '{"effect_receipt":"...","correlation_id":"...","plan_schema":1,
  *           "packages":["nginx"],"lock_timeout":30}' \
  *     | sudo PKEXEC_UID=1000 ./pkgexec-effect apt.install     # VM only
+ *   # verb selects the mechanism: apt.install/remove/purge/upgrade/dist_upgrade
+ *   # (A), apt.update (B), apt.hold/apt.unhold (C), apt.configure (D).
  */
 #include "../src/apt_effect.hh"
 #include "../src/harden.h"
@@ -103,10 +106,28 @@ int main(int argc, char **argv) {
 
     char out_cid[PKGX_CID_LEN + 1] = {0};
     const char *detail = "";
-    pkgx_apt_status st = pkgx_apt_txn_effect(
-        verb, (const char *const *) req.packages, req.npackages,
-        req.effect_receipt, uid, (int) req.plan_schema, req.correlation_id,
-        (int) req.lock_timeout, &tx, out_cid, &detail);
+    pkgx_apt_status st;
+    if (strcmp(verb, "apt.update") == 0) {
+        /* Full refresh (resource ""); a subset token is a stage-3 entrypoint arg. */
+        st = pkgx_apt_update_effect("", req.effect_receipt, uid,
+                                    (int) req.plan_schema, req.correlation_id,
+                                    (int) req.lock_timeout, &tx, out_cid, &detail);
+    } else if (strcmp(verb, "apt.hold") == 0 || strcmp(verb, "apt.unhold") == 0) {
+        st = pkgx_apt_hold_effect(
+            verb, (const char *const *) req.packages, req.npackages,
+            req.effect_receipt, uid, (int) req.plan_schema, req.correlation_id,
+            (int) req.lock_timeout, &tx, out_cid, &detail);
+    } else if (strcmp(verb, "apt.configure") == 0) {
+        st = pkgx_apt_configure_effect(req.effect_receipt, uid,
+                                       (int) req.plan_schema, req.correlation_id,
+                                       (int) req.lock_timeout, &tx, out_cid,
+                                       &detail);
+    } else {
+        st = pkgx_apt_txn_effect(
+            verb, (const char *const *) req.packages, req.npackages,
+            req.effect_receipt, uid, (int) req.plan_schema, req.correlation_id,
+            (int) req.lock_timeout, &tx, out_cid, &detail);
+    }
 
     printf("status=%s detail=%s cid=%s\n", status_name(st), detail, out_cid);
     pkgx_request_free(&req);

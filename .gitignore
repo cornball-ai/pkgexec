@@ -9,6 +9,7 @@
 /runix-apt-*
 /pkgexec-probe
 /pkgexec-plan
+/pkgexec-effect
 # fuzzer (the seed corpus in fuzz/corpus/*.json is tracked)
 /fuzz-request
 crash-*
