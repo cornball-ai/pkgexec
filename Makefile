@@ -31,21 +31,22 @@ PREFIX ?= /usr
 DOCDIR ?= $(PREFIX)/share/doc/pkgexec
 
 .PHONY: all check test-digest test-request test-harden test-exec-child \
-        test-redeem test-policy test-plan test-effect test-rapt test-transport \
-        fuzz probe plan effect clean install
+        test-redeem test-policy test-plan test-effect test-apt-outcome \
+        test-spawn test-rapt test-transport fuzz probe plan effect clean install
 
 all: libpkgexec.a
 
 # The non-privileged production sources, compiled hardened into a static lib —
 # a compile gate (no mutation-capable entrypoint yet).
 libpkgexec.a: src/digest.c src/request.c src/harden.c src/redeem.c src/policy.c \
-              src/plan.c src/effect.c src/transport.c
+              src/plan.c src/effect.c src/transport.c src/spawn.c src/apt_status.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(JSON_CFLAGS) $(CRYPTO_CFLAGS) -c $^
 	ar rcs $@ digest.o request.o harden.o redeem.o policy.o plan.o effect.o \
-	    transport.o
+	    transport.o spawn.o apt_status.o
 
 check: test-digest test-request test-harden test-exec-child \
-       test-redeem test-policy test-plan test-effect test-rapt test-transport
+       test-redeem test-policy test-plan test-effect test-apt-outcome \
+       test-spawn test-rapt test-transport
 
 # Schema-1 digest encoder vs the shared golden corpus (Jansson + libcrypto).
 test-digest: src/digest.c tests/test_digest.c
@@ -95,6 +96,16 @@ test-effect: src/effect.c src/plan.c src/policy.c src/redeem.c src/digest.c \
 	    $^ -o build-test-effect $(JSON_LIBS) $(CRYPTO_LIBS)
 	./build-test-effect
 
+# Post-effect truth table: pre-effect failure vs interrupted-dpkg-after-effect.
+test-apt-outcome: src/apt_status.c tests/test_apt_outcome.c
+	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(SAN) $^ -o build-test-apt-outcome
+	./build-test-apt-outcome
+
+# No-shell spawn helper: exit status, full-payload delivery, SIGPIPE-safe writes.
+test-spawn: src/spawn.c tests/test_spawn.c
+	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(SAN) $^ -o build-test-spawn
+	./build-test-spawn
+
 # Cross-repo drift alarm: the pinned rapt ownership predicate still matches rapt's
 # source (skips where rapt is not checked out, e.g. CI).
 test-rapt: tests/test_rapt.c
@@ -135,25 +146,26 @@ plan: tools/plan.cc src/digest.c src/policy.c
 # does not run it. Requires libapt-pkg-dev + libssl-dev + libjansson-dev.
 effect: tools/effect.cc src/apt_common.cc src/apt_txn.cc src/digest.c \
         src/policy.c src/plan.c src/effect.c src/redeem.c src/request.c \
-        src/transport.c src/harden.c
+        src/transport.c src/harden.c src/apt_status.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(JSON_CFLAGS) $(CRYPTO_CFLAGS) -c \
 	    src/digest.c src/policy.c src/plan.c src/effect.c src/redeem.c \
-	    src/request.c src/transport.c src/harden.c
+	    src/request.c src/transport.c src/harden.c src/apt_status.c
 	$(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 $(WARN) -c \
 	    src/apt_common.cc src/apt_txn.cc
 	$(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 $(WARN) -c tools/effect.cc \
 	    -o effect_diag.o
 	$(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 -o pkgexec-effect \
 	    effect_diag.o apt_common.o apt_txn.o digest.o policy.o plan.o effect.o \
-	    redeem.o request.o transport.o harden.o \
+	    redeem.o request.o transport.o harden.o apt_status.o \
 	    $(LDFLAGS) -lapt-pkg $(CRYPTO_LIBS) $(JSON_LIBS)
 
 clean:
 	rm -f libpkgexec.a digest.o request.o harden.o redeem.o policy.o plan.o \
-	    effect.o transport.o apt_common.o apt_txn.o effect_diag.o \
-	    build-test-digest build-test-request \
+	    effect.o transport.o spawn.o apt_status.o apt_common.o apt_txn.o \
+	    effect_diag.o build-test-digest build-test-request \
 	    build-test-harden build-test-exec-child build-test-redeem \
-	    build-test-policy build-test-plan build-test-effect build-test-rapt \
+	    build-test-policy build-test-plan build-test-effect \
+	    build-test-apt-outcome build-test-spawn build-test-rapt \
 	    build-test-transport fuzz-request pkgexec-probe pkgexec-plan \
 	    pkgexec-effect
 

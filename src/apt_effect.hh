@@ -8,8 +8,9 @@
 #ifndef PKGEXEC_APT_EFFECT_HH
 #define PKGEXEC_APT_EFFECT_HH
 
-#include "redeem.h"    /* PKGX_CID_LEN */
-#include "transport.h" /* pkgx_transport */
+#include "apt_status.h" /* pkgx_apt_status */
+#include "redeem.h"     /* PKGX_CID_LEN */
+#include "transport.h"  /* pkgx_transport */
 
 #include <stddef.h>
 #include <sys/types.h>
@@ -17,22 +18,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* The effector outcome; a stage-3 entrypoint maps each to the runix_* condition
- * on the helper's stdout result object (plan §5 error table). */
-typedef enum {
-    PKGX_APT_OK = 0,         /* redeemed and committed */
-    PKGX_APT_NO_OP,          /* nothing to do; the receipt is left unspent */
-    PKGX_APT_LOCKED,         /* dpkg frontend lock not taken in the window */
-    PKGX_APT_NOT_OWNED,      /* a rapt-owned (r-*) package is in the plan */
-    PKGX_APT_HELD,           /* a held package would change */
-    PKGX_APT_PROTECTED,      /* an essential/protected package would be removed */
-    PKGX_APT_NO_INTENT,      /* redeem refused / cid mismatch / protocol */
-    PKGX_APT_RESOLVE_FAILED, /* unknown package, or apt could not resolve */
-    PKGX_APT_COMMIT_FAILED,  /* GetArchives/DoInstall or the dpkg pass failed */
-    PKGX_APT_BROKEN,         /* committed, but the dpkg database is left broken */
-    PKGX_APT_INTERNAL        /* init / digest / allocation failure */
-} pkgx_apt_status;
 
 /* A. Package transactions: install / remove / purge / upgrade / dist_upgrade.
  * `verb` is the entrypoint's compile-time apt.* string; `targets` the requested

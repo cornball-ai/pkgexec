@@ -41,6 +41,8 @@ static const char *status_name(pkgx_apt_status s) {
         return "no_intent";
     case PKGX_APT_RESOLVE_FAILED:
         return "resolve_failed";
+    case PKGX_APT_NOT_APPLIED:
+        return "not_applied";
     case PKGX_APT_COMMIT_FAILED:
         return "operation_failed";
     case PKGX_APT_BROKEN:
@@ -83,10 +85,15 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* Hygiene before any dpkg/maintainer script runs. */
-    pkgx_scrub_env();
-    pkgx_null_stdin();
-    pkgx_cloexec_from(3);
+    /* Hygiene before any dpkg/maintainer script runs — fail closed: a privileged
+     * entrypoint must refuse if the environment cannot be scrubbed, stdin cannot
+     * be neutralized, or inherited descriptors cannot be closed. */
+    if (pkgx_scrub_env() != 0 || pkgx_null_stdin() != 0 ||
+        pkgx_cloexec_from(3) != 0) {
+        pkgx_request_free(&req);
+        fprintf(stderr, "hygiene: environment/fd hardening failed\n");
+        return 1;
+    }
 
     pkgx_transport tx;
     memset(&tx, 0, sizeof tx);

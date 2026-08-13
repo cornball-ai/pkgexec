@@ -86,16 +86,23 @@ int main(void) {
             pkgx_request_free(&req);
         }
     }
-    /* upgrade may be targetless */
+    /* upgrade is whole-system in v1: targetless parses, targets are rejected */
     {
         pkgx_request req;
         const char *ec = "";
         int rc = pkgx_parse_request("apt.upgrade", body, strlen(body), &req, &ec);
-        CHECK(rc == 0, "targetless upgrade parses (arity any)");
+        CHECK(rc == 0 && req.npackages == 0, "targetless upgrade parses");
         if (rc == 0) {
             pkgx_request_free(&req);
         }
     }
+    snprintf(body, sizeof body,
+             "{\"effect_receipt\":\"%s\",\"correlation_id\":\"%s\","
+             "\"plan_schema\":1,\"packages\":[\"nginx\"],\"lock_timeout\":0}", R, C);
+    reject("apt.upgrade", body, "schema_invalid",
+           "upgrade with a package is refused (whole-system only in v1)");
+    reject("apt.dist_upgrade", body, "schema_invalid",
+           "dist_upgrade with a package is refused (whole-system only in v1)");
 
     /* --- per-verb arity refusals --- */
     snprintf(body, sizeof body,

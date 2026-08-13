@@ -50,10 +50,6 @@ public:
     }
 };
 
-/* Spawn a program (no shell) with an explicit argv, optionally feeding `input`
- * to its stdin, and wait. Returns 0 iff it exited 0. argv is NULL-terminated;
- * argv[0] must be an absolute path. Used by the hold and configure committers,
- * which drive dpkg directly. */
-int pkgx_spawn_wait(const char *const argv[], const char *input);
+/* The hold and configure committers drive dpkg through pkgx_spawn_wait (spawn.h). */
 
 #endif /* PKGEXEC_APT_COMMON_HH */

@@ -128,18 +128,19 @@ static int depth(const json_t *v) {
     return 0;
 }
 
-enum { ARITY_NONE, ARITY_ONE_PLUS, ARITY_ANY };
+enum { ARITY_NONE, ARITY_ONE_PLUS };
 static int verb_arity(const char *verb) {
-    if (strcmp(verb, "apt.update") == 0 || strcmp(verb, "apt.configure") == 0) {
+    /* update/configure take no packages; upgrade/dist_upgrade are whole-system
+     * in v1 (target-scoped upgrades are not yet implemented, so targets are
+     * rejected rather than silently ignored). */
+    if (strcmp(verb, "apt.update") == 0 || strcmp(verb, "apt.configure") == 0 ||
+        strcmp(verb, "apt.upgrade") == 0 || strcmp(verb, "apt.dist_upgrade") == 0) {
         return ARITY_NONE;
     }
     if (strcmp(verb, "apt.install") == 0 || strcmp(verb, "apt.remove") == 0 ||
         strcmp(verb, "apt.purge") == 0 || strcmp(verb, "apt.hold") == 0 ||
         strcmp(verb, "apt.unhold") == 0) {
         return ARITY_ONE_PLUS;
-    }
-    if (strcmp(verb, "apt.upgrade") == 0 || strcmp(verb, "apt.dist_upgrade") == 0) {
-        return ARITY_ANY;
     }
     return -1;
 }

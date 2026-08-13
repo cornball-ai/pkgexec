@@ -7,14 +7,6 @@
 #include <apt-pkg/pkgcache.h>
 #include <apt-pkg/pkgsystem.h>
 
-#include <errno.h>
-#include <spawn.h>
-#include <string.h>
-#include <sys/wait.h>
-#include <unistd.h>
-
-extern char **environ;
-
 bool pkgx_apt_init(const char **err) {
     if (!pkgInitConfig(*_config)) {
         if (err != nullptr) {
@@ -97,49 +89,4 @@ void pkgx_apt_map_txn(pkgCache *cache, pkgDepCache *dc,
         r.nflags = h.flagp.size();
         recs.push_back(r);
     }
-}
-
-int pkgx_spawn_wait(const char *const argv[], const char *input) {
-    int in[2] = {-1, -1};
-    if (input != nullptr && pipe(in) != 0) {
-        return -1;
-    }
-    posix_spawn_file_actions_t fa;
-    posix_spawn_file_actions_init(&fa);
-    if (input != nullptr) {
-        posix_spawn_file_actions_adddup2(&fa, in[0], STDIN_FILENO);
-        posix_spawn_file_actions_addclose(&fa, in[0]);
-        posix_spawn_file_actions_addclose(&fa, in[1]);
-    }
-    pid_t pid = 0;
-    int rc = posix_spawn(&pid, argv[0], &fa, nullptr,
-                         const_cast<char *const *>(argv), environ);
-    posix_spawn_file_actions_destroy(&fa);
-    if (input != nullptr) {
-        close(in[0]);
-        if (rc != 0) {
-            close(in[1]);
-            return -1;
-        }
-        size_t len = strlen(input);
-        size_t off = 0;
-        while (off < len) {
-            ssize_t w = write(in[1], input + off, len - off);
-            if (w < 0) {
-                if (errno == EINTR) {
-                    continue;
-                }
-                break; /* child may have exited; the wait below reports it */
-            }
-            off += (size_t) w;
-        }
-        close(in[1]);
-    } else if (rc != 0) {
-        return -1;
-    }
-    int status = 0;
-    if (waitpid(pid, &status, 0) != pid) {
-        return -1;
-    }
-    return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ? 0 : -1;
 }
