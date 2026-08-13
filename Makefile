@@ -1,8 +1,10 @@
-# pkgexec build. Slice 1 is incapable of mutation: it builds the schema-1
-# plan-digest encoder (OpenSSL EVP), the strict stdin request parser (system
-# Jansson), and process-hygiene primitives, plus their sanitized tests. There is
-# no privileged entrypoint, no lock, and no libapt in the built product yet; the
-# read-only `probe` target is an explicit spike, not built by `all`/`check`.
+# pkgexec build. The static lib holds the logic that is testable without root:
+# schema-1 digest (OpenSSL EVP), strict stdin parser (Jansson), process hygiene,
+# broker redeem client, trusted-side policy, the non-committing plan step, and
+# the authenticated broker transport (SO_PEERCRED before any byte). `check`
+# runs all of it sanitized, against fakes — no broker, no lock, no root. The
+# libapt-linking targets (`probe`, `plan`) are diagnostics whose runtime
+# behaviour is VM-gated; CI treats them as compile+link proof only.
 
 CC ?= gcc
 CXX ?= g++
@@ -29,19 +31,20 @@ PREFIX ?= /usr
 DOCDIR ?= $(PREFIX)/share/doc/pkgexec
 
 .PHONY: all check test-digest test-request test-harden test-exec-child \
-        test-redeem test-policy test-plan test-rapt fuzz probe plan clean install
+        test-redeem test-policy test-plan test-rapt test-transport fuzz probe \
+        plan clean install
 
 all: libpkgexec.a
 
 # The non-privileged production sources, compiled hardened into a static lib —
 # a compile gate (no mutation-capable entrypoint yet).
 libpkgexec.a: src/digest.c src/request.c src/harden.c src/redeem.c src/policy.c \
-              src/plan.c
+              src/plan.c src/transport.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(JSON_CFLAGS) $(CRYPTO_CFLAGS) -c $^
-	ar rcs $@ digest.o request.o harden.o redeem.o policy.o plan.o
+	ar rcs $@ digest.o request.o harden.o redeem.o policy.o plan.o transport.o
 
 check: test-digest test-request test-harden test-exec-child \
-       test-redeem test-policy test-plan test-rapt
+       test-redeem test-policy test-plan test-rapt test-transport
 
 # Schema-1 digest encoder vs the shared golden corpus (Jansson + libcrypto).
 test-digest: src/digest.c tests/test_digest.c
@@ -88,6 +91,13 @@ test-rapt: tests/test_rapt.c
 	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(SAN) $^ -o build-test-rapt
 	./build-test-rapt
 
+# Authenticated broker transport: SO_PEERCRED before any byte, framing,
+# absolute deadlines — against fork'd fake unix-socket servers (no root).
+test-transport: src/transport.c src/redeem.c tests/test_transport.c
+	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(JSON_CFLAGS) $(SAN) \
+	    $^ -o build-test-transport $(JSON_LIBS)
+	./build-test-transport
+
 # Request-parser fuzzing. Requires clang (libFuzzer): make fuzz CC=clang
 fuzz: fuzz/fuzz_request.c src/request.c
 	$(CC) $(CPPFLAGS) -std=c11 $(JSON_CFLAGS) \
@@ -110,9 +120,10 @@ plan: tools/plan.cc src/digest.c src/policy.c
 
 clean:
 	rm -f libpkgexec.a digest.o request.o harden.o redeem.o policy.o plan.o \
-	    build-test-digest build-test-request build-test-harden \
+	    transport.o build-test-digest build-test-request build-test-harden \
 	    build-test-exec-child build-test-redeem build-test-policy \
-	    build-test-plan build-test-rapt fuzz-request pkgexec-probe pkgexec-plan
+	    build-test-plan build-test-rapt build-test-transport fuzz-request \
+	    pkgexec-probe pkgexec-plan
 
 # Slice 1 installs docs + the corpus only (no entrypoint yet), so the .deb has a
 # meaningful build/install smoke while remaining incapable of mutation.
