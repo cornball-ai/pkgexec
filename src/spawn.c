@@ -58,37 +58,50 @@ int pkgx_spawn_wait(const char *const argv[], const char *input) {
     if (input != NULL) {
         /* Ignore SIGPIPE only for the write: a child that closes its stdin
          * early then yields EPIPE (a failure we detect) instead of killing this
-         * process. The prior disposition is restored immediately after. */
+         * process. If the handler cannot be installed, `old` is undefined and a
+         * write could still raise SIGPIPE — so fail closed and do not write. */
         struct sigaction ign, old;
         memset(&ign, 0, sizeof ign);
         ign.sa_handler = SIG_IGN;
         sigemptyset(&ign.sa_mask);
-        sigaction(SIGPIPE, &ign, &old);
-
-        size_t len = strlen(input);
-        size_t off = 0;
-        while (off < len) {
-            ssize_t w = write(in[1], input + off, len - off);
-            if (w < 0) {
-                if (errno == EINTR) {
-                    continue;
+        if (sigaction(SIGPIPE, &ign, &old) != 0) {
+            deliver_ok = 0;
+            close(in[1]);
+        } else {
+            size_t len = strlen(input);
+            size_t off = 0;
+            while (off < len) {
+                ssize_t w = write(in[1], input + off, len - off);
+                if (w < 0) {
+                    if (errno == EINTR) {
+                        continue;
+                    }
+                    break; /* EPIPE (child closed) or other error */
                 }
-                break; /* EPIPE (child closed) or other error */
+                if (w == 0) {
+                    break;
+                }
+                off += (size_t) w;
             }
-            if (w == 0) {
-                break;
+            if (off != len) {
+                deliver_ok = 0; /* incomplete payload: the child took only part */
             }
-            off += (size_t) w;
+            close(in[1]);
+            /* Restoration failing leaves this process's SIGPIPE disposition
+             * wrong; a one-shot helper is about to exit, but treat the fault as
+             * a failure so the caller reconciles rather than trusts the result. */
+            if (sigaction(SIGPIPE, &old, NULL) != 0) {
+                deliver_ok = 0;
+            }
         }
-        if (off != len) {
-            deliver_ok = 0; /* incomplete payload: the child did not take it all */
-        }
-        close(in[1]);
-        sigaction(SIGPIPE, &old, NULL);
     }
 
     int status = 0;
-    if (waitpid(pid, &status, 0) != pid) {
+    pid_t w;
+    do {
+        w = waitpid(pid, &status, 0);
+    } while (w < 0 && errno == EINTR);
+    if (w != pid) {
         return -1;
     }
     int exit_ok = (WIFEXITED(status) && WEXITSTATUS(status) == 0);
