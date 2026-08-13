@@ -19,42 +19,13 @@
 #include "../src/harden.h"
 #include "../src/redeem.h"
 #include "../src/request.h"
+#include "../src/result.h"
 #include "../src/transport.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-static const char *status_name(pkgx_apt_status s) {
-    switch (s) {
-    case PKGX_APT_OK:
-        return "ok";
-    case PKGX_APT_NO_OP:
-        return "no_op";
-    case PKGX_APT_LOCKED:
-        return "apt_locked";
-    case PKGX_APT_NOT_OWNED:
-        return "package_not_owned";
-    case PKGX_APT_HELD:
-        return "held";
-    case PKGX_APT_PROTECTED:
-        return "protected_package";
-    case PKGX_APT_NO_INTENT:
-        return "no_intent";
-    case PKGX_APT_RESOLVE_FAILED:
-        return "resolve_failed";
-    case PKGX_APT_NOT_APPLIED:
-        return "not_applied";
-    case PKGX_APT_COMMIT_FAILED:
-        return "operation_failed";
-    case PKGX_APT_BROKEN:
-        return "dpkg_broken";
-    case PKGX_APT_INTERNAL:
-        return "internal";
-    }
-    return "internal";
-}
 
 int main(int argc, char **argv) {
     if (argc < 2) {
@@ -106,30 +77,39 @@ int main(int argc, char **argv) {
 
     char out_cid[PKGX_CID_LEN + 1] = {0};
     const char *detail = "";
+    int issued = 0;
     pkgx_apt_status st;
     if (strcmp(verb, "apt.update") == 0) {
         /* Full refresh (resource ""); a subset token is a stage-3 entrypoint arg. */
         st = pkgx_apt_update_effect("", req.effect_receipt, uid,
                                     (int) req.plan_schema, req.correlation_id,
-                                    (int) req.lock_timeout, &tx, out_cid, &detail);
+                                    (int) req.lock_timeout, &tx, out_cid, &issued,
+                                    &detail);
     } else if (strcmp(verb, "apt.hold") == 0 || strcmp(verb, "apt.unhold") == 0) {
         st = pkgx_apt_hold_effect(
             verb, (const char *const *) req.packages, req.npackages,
             req.effect_receipt, uid, (int) req.plan_schema, req.correlation_id,
-            (int) req.lock_timeout, &tx, out_cid, &detail);
+            (int) req.lock_timeout, &tx, out_cid, &issued, &detail);
     } else if (strcmp(verb, "apt.configure") == 0) {
         st = pkgx_apt_configure_effect(req.effect_receipt, uid,
                                        (int) req.plan_schema, req.correlation_id,
                                        (int) req.lock_timeout, &tx, out_cid,
-                                       &detail);
+                                       &issued, &detail);
     } else {
         st = pkgx_apt_txn_effect(
             verb, (const char *const *) req.packages, req.npackages,
             req.effect_receipt, uid, (int) req.plan_schema, req.correlation_id,
-            (int) req.lock_timeout, &tx, out_cid, &detail);
+            (int) req.lock_timeout, &tx, out_cid, &issued, &detail);
     }
 
-    printf("status=%s detail=%s cid=%s\n", status_name(st), detail, out_cid);
+    /* The result channel: exactly the strict JSON a stage-3 entrypoint emits. */
+    char result[512];
+    if (pkgx_result_json(st, issued, out_cid, detail, result, sizeof result) < 0) {
+        fprintf(stderr, "result: could not serialize\n");
+        pkgx_request_free(&req);
+        return 1;
+    }
+    printf("%s\n", result);
     pkgx_request_free(&req);
     return (st == PKGX_APT_OK || st == PKGX_APT_NO_OP) ? 0 : 1;
 }

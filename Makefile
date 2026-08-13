@@ -32,21 +32,23 @@ DOCDIR ?= $(PREFIX)/share/doc/pkgexec
 
 .PHONY: all check test-digest test-request test-harden test-exec-child \
         test-redeem test-policy test-plan test-effect test-apt-outcome \
-        test-spawn test-rapt test-transport fuzz probe plan effect clean install
+        test-spawn test-result test-rapt test-transport fuzz probe plan effect \
+        clean install
 
 all: libpkgexec.a
 
 # The non-privileged production sources, compiled hardened into a static lib —
 # a compile gate (no mutation-capable entrypoint yet).
 libpkgexec.a: src/digest.c src/request.c src/harden.c src/redeem.c src/policy.c \
-              src/plan.c src/effect.c src/transport.c src/spawn.c src/apt_status.c
+              src/plan.c src/effect.c src/transport.c src/spawn.c \
+              src/apt_status.c src/result.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(JSON_CFLAGS) $(CRYPTO_CFLAGS) -c $^
 	ar rcs $@ digest.o request.o harden.o redeem.o policy.o plan.o effect.o \
-	    transport.o spawn.o apt_status.o
+	    transport.o spawn.o apt_status.o result.o
 
 check: test-digest test-request test-harden test-exec-child \
        test-redeem test-policy test-plan test-effect test-apt-outcome \
-       test-spawn test-rapt test-transport
+       test-spawn test-result test-rapt test-transport
 
 # Schema-1 digest encoder vs the shared golden corpus (Jansson + libcrypto).
 test-digest: src/digest.c tests/test_digest.c
@@ -101,10 +103,18 @@ test-apt-outcome: src/apt_status.c tests/test_apt_outcome.c
 	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(SAN) $^ -o build-test-apt-outcome
 	./build-test-apt-outcome
 
-# No-shell spawn helper: exit status, full-payload delivery, SIGPIPE-safe writes.
+# No-shell spawn helper: exit status, full-payload delivery, SIGPIPE-safe writes,
+# and the `started` (effect_issued) output.
 test-spawn: src/spawn.c tests/test_spawn.c
 	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(SAN) $^ -o build-test-spawn
 	./build-test-spawn
+
+# Result channel: the runix_* status name map + strict JSON with a first-class
+# effect_issued boolean (parsed back with Jansson to assert structure).
+test-result: src/result.c tests/test_result.c
+	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(JSON_CFLAGS) $(SAN) \
+	    $^ -o build-test-result $(JSON_LIBS)
+	./build-test-result
 
 # Cross-repo drift alarm: the pinned rapt ownership predicate still matches rapt's
 # source (skips where rapt is not checked out, e.g. CI).
@@ -149,10 +159,11 @@ plan: tools/plan.cc src/digest.c src/policy.c
 effect: tools/effect.cc src/apt_common.cc src/apt_txn.cc src/apt_update.cc \
         src/apt_hold.cc src/apt_configure.cc src/digest.c src/policy.c \
         src/plan.c src/effect.c src/redeem.c src/request.c src/transport.c \
-        src/harden.c src/apt_status.c src/spawn.c
+        src/harden.c src/apt_status.c src/spawn.c src/result.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(JSON_CFLAGS) $(CRYPTO_CFLAGS) -c \
 	    src/digest.c src/policy.c src/plan.c src/effect.c src/redeem.c \
-	    src/request.c src/transport.c src/harden.c src/apt_status.c src/spawn.c
+	    src/request.c src/transport.c src/harden.c src/apt_status.c src/spawn.c \
+	    src/result.c
 	$(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 $(WARN) -c \
 	    src/apt_common.cc src/apt_txn.cc src/apt_update.cc src/apt_hold.cc \
 	    src/apt_configure.cc
@@ -161,19 +172,19 @@ effect: tools/effect.cc src/apt_common.cc src/apt_txn.cc src/apt_update.cc \
 	$(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 -o pkgexec-effect \
 	    effect_diag.o apt_common.o apt_txn.o apt_update.o apt_hold.o \
 	    apt_configure.o digest.o policy.o plan.o effect.o redeem.o request.o \
-	    transport.o harden.o apt_status.o spawn.o \
+	    transport.o harden.o apt_status.o spawn.o result.o \
 	    $(LDFLAGS) -lapt-pkg $(CRYPTO_LIBS) $(JSON_LIBS)
 
 clean:
 	rm -f libpkgexec.a digest.o request.o harden.o redeem.o policy.o plan.o \
-	    effect.o transport.o spawn.o apt_status.o apt_common.o apt_txn.o \
-	    apt_update.o apt_hold.o apt_configure.o \
+	    effect.o transport.o spawn.o apt_status.o result.o apt_common.o \
+	    apt_txn.o apt_update.o apt_hold.o apt_configure.o \
 	    effect_diag.o build-test-digest build-test-request \
 	    build-test-harden build-test-exec-child build-test-redeem \
 	    build-test-policy build-test-plan build-test-effect \
-	    build-test-apt-outcome build-test-spawn build-test-rapt \
-	    build-test-transport fuzz-request pkgexec-probe pkgexec-plan \
-	    pkgexec-effect
+	    build-test-apt-outcome build-test-spawn build-test-result \
+	    build-test-rapt build-test-transport fuzz-request pkgexec-probe \
+	    pkgexec-plan pkgexec-effect
 
 # Slice 1 installs docs + the corpus only (no entrypoint yet), so the .deb has a
 # meaningful build/install smoke while remaining incapable of mutation.

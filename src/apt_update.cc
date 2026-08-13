@@ -82,8 +82,10 @@ bool indexes_readable() {
 extern "C" pkgx_apt_status pkgx_apt_update_effect(
     const char *resource_token, const char *effect_receipt, uid_t principal_uid,
     int plan_schema, const char *expected_cid, int lock_timeout_s,
-    pkgx_transport *tx, char out_cid[PKGX_CID_LEN + 1], const char **detail) {
+    pkgx_transport *tx, char out_cid[PKGX_CID_LEN + 1], int *effect_issued,
+    const char **detail) {
     *detail = "";
+    *effect_issued = 0; /* nothing issued until ListUpdate begins */
     const char *err = nullptr;
     if (!pkgx_apt_init(&err)) {
         *detail = err;
@@ -240,6 +242,9 @@ extern "C" pkgx_apt_status pkgx_apt_update_effect(
     UpdateCommitCtx cc = {&list, &status, false, false};
     pkgx_effect_gate(pr, out_cid, update_commit, &cc);
 
+    /* effect_issued: the committer runs ListUpdate the instant it is entered, so
+     * entering IS issuing the refresh (indexes may have changed). */
+    *effect_issued = cc.entered ? 1 : 0;
     int readable = cc.entered ? (indexes_readable() ? 1 : 0) : 0;
     pkgx_apt_status st =
         pkgx_update_classify(cc.entered, cc.refresh_ok ? 1 : 0, readable);

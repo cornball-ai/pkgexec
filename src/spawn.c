@@ -10,7 +10,10 @@
 
 extern char **environ;
 
-int pkgx_spawn_wait(const char *const argv[], const char *input) {
+int pkgx_spawn_wait(const char *const argv[], const char *input, int *started) {
+    if (started != NULL) {
+        *started = 0; /* no child yet; set to 1 only once posix_spawn succeeds */
+    }
     if (argv == NULL || argv[0] == NULL) {
         return -1;
     }
@@ -52,6 +55,9 @@ int pkgx_spawn_wait(const char *const argv[], const char *input) {
             close(in[1]);
         }
         return -1;
+    }
+    if (started != NULL) {
+        *started = 1; /* the child exists; from here the host may be mutated */
     }
 
     int deliver_ok = 1;

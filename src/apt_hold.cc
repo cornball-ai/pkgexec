@@ -63,6 +63,7 @@ struct HoldCommitCtx {
     const std::string *payload; /* "<pkg> <selection>\n" lines for set-selections */
     std::string dpkg;           /* apt-configured dpkg path (kept alive for argv) */
     bool entered;
+    bool issued; /* the dpkg child was spawned (effect_issued) */
     bool applied;
 };
 
@@ -74,12 +75,14 @@ extern "C" int hold_commit(void *ctx, const char *correlation_id) {
     /* Hand the inner dpkg database lock to the child: release it while keeping the
      * outer frontend lock held (so no other apt frontend interleaves), exactly as
      * DoInstall does for A. Without this, the spawned dpkg blocks on the lock we
-     * still hold. If the hand-off fails, do not run dpkg. */
+     * still hold. If the hand-off fails, do not run dpkg (effect not issued). */
     if (!_system->UnLockInner()) {
         return -1;
     }
     const char *argv[] = {c->dpkg.c_str(), "--set-selections", nullptr};
-    c->applied = (pkgx_spawn_wait(argv, c->payload->c_str()) == 0);
+    int started = 0;
+    c->applied = (pkgx_spawn_wait(argv, c->payload->c_str(), &started) == 0);
+    c->issued = (started != 0); /* effect_issued: dpkg ran, so state may have changed */
     /* Re-take the inner lock under the still-held outer lock; a failure leaves the
      * context inconsistent, so fail closed and let the caller reconcile. */
     if (!_system->LockInner()) {
@@ -121,8 +124,9 @@ extern "C" pkgx_apt_status pkgx_apt_hold_effect(
     const char *verb, const char *const *targets, size_t ntargets,
     const char *effect_receipt, uid_t principal_uid, int plan_schema,
     const char *expected_cid, int lock_timeout_s, pkgx_transport *tx,
-    char out_cid[PKGX_CID_LEN + 1], const char **detail) {
+    char out_cid[PKGX_CID_LEN + 1], int *effect_issued, const char **detail) {
     *detail = "";
+    *effect_issued = 0; /* nothing issued until the dpkg child is spawned */
     const char *err = nullptr;
     if (!pkgx_apt_init(&err)) {
         *detail = err;
@@ -223,9 +227,11 @@ extern "C" pkgx_apt_status pkgx_apt_hold_effect(
     cc.payload = &payload;
     cc.dpkg = _config->Find("Dir::Bin::dpkg", "/usr/bin/dpkg");
     cc.entered = false;
+    cc.issued = false;
     cc.applied = false;
     pkgx_effect_gate(pr, out_cid, hold_commit, &cc);
 
+    *effect_issued = cc.issued ? 1 : 0;
     int matched = cc.entered ? (selections_match(changes) ? 1 : 0) : 0;
     pkgx_apt_status st =
         pkgx_hold_classify(cc.entered, cc.applied ? 1 : 0, matched);

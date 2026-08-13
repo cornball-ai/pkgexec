@@ -108,8 +108,9 @@ extern "C" pkgx_apt_status pkgx_apt_txn_effect(
     const char *verb, const char *const *targets, size_t ntargets,
     const char *effect_receipt, uid_t principal_uid, int plan_schema,
     const char *expected_cid, int lock_timeout_s, pkgx_transport *tx,
-    char out_cid[PKGX_CID_LEN + 1], const char **detail) {
+    char out_cid[PKGX_CID_LEN + 1], int *effect_issued, const char **detail) {
     *detail = "";
+    *effect_issued = 0; /* nothing issued until DoInstall is reached */
     const char *err = nullptr;
     if (!pkgx_apt_init(&err)) {
         *detail = err;
@@ -217,6 +218,8 @@ extern "C" pkgx_apt_status pkgx_apt_txn_effect(
     if (cc.execution_began) {
         broken = pkgx_apt_ground_truth_broken() ? 1 : 0;
     }
+    /* effect_issued: the host may have been mutated iff DoInstall was reached. */
+    *effect_issued = cc.execution_began ? 1 : 0;
     pkgx_apt_status st = pkgx_txn_classify(cc.entered, cc.execution_began,
                                            cc.committed_ok, broken);
     switch (st) {

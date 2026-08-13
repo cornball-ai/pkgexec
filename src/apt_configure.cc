@@ -64,6 +64,7 @@ struct CfgHolder {
 struct ConfigureCommitCtx {
     std::string dpkg; /* apt-configured dpkg path (kept alive for argv) */
     bool entered;
+    bool issued; /* the dpkg child was spawned (effect_issued) */
     bool ran_ok;
 };
 
@@ -74,12 +75,15 @@ extern "C" int configure_commit(void *ctx, const char *correlation_id) {
     c->entered = true;
     /* Hand the inner dpkg database lock to the child (release it, keep the outer
      * frontend lock held), as DoInstall does for A; otherwise the spawned dpkg
-     * blocks on the lock we still hold. If the hand-off fails, do not run dpkg. */
+     * blocks on the lock we still hold. If the hand-off fails, do not run dpkg
+     * (effect not issued). */
     if (!_system->UnLockInner()) {
         return -1;
     }
     const char *argv[] = {c->dpkg.c_str(), "--configure", "--pending", nullptr};
-    c->ran_ok = (pkgx_spawn_wait(argv, nullptr) == 0);
+    int started = 0;
+    c->ran_ok = (pkgx_spawn_wait(argv, nullptr, &started) == 0);
+    c->issued = (started != 0); /* effect_issued: dpkg ran, so state may have changed */
     /* Re-take the inner lock under the still-held outer lock; a failure leaves the
      * context inconsistent, so fail closed and let the caller reconcile. */
     if (!_system->LockInner()) {
@@ -93,8 +97,10 @@ extern "C" int configure_commit(void *ctx, const char *correlation_id) {
 extern "C" pkgx_apt_status pkgx_apt_configure_effect(
     const char *effect_receipt, uid_t principal_uid, int plan_schema,
     const char *expected_cid, int lock_timeout_s, pkgx_transport *tx,
-    char out_cid[PKGX_CID_LEN + 1], const char **detail) {
+    char out_cid[PKGX_CID_LEN + 1], int *effect_issued, const char **detail) {
     *detail = "";
+    *effect_issued = 0; /* stays 0 through the half-installed refusal and any
+                         * pre-spawn failure; set only once dpkg is spawned */
     const char *err = nullptr;
     if (!pkgx_apt_init(&err)) {
         *detail = err;
@@ -177,12 +183,16 @@ extern "C" pkgx_apt_status pkgx_apt_configure_effect(
     ConfigureCommitCtx cc;
     cc.dpkg = _config->Find("Dir::Bin::dpkg", "/usr/bin/dpkg");
     cc.entered = false;
+    cc.issued = false;
     cc.ran_ok = false;
     pkgx_effect_gate(pr, out_cid, configure_commit, &cc);
 
-    /* configure has no fetch phase: execution begins when the gate admits. Read
-     * the shared dpkg ground truth only once it did, then classify with the same
-     * OK / COMMIT_FAILED / BROKEN logic as A. */
+    /* effect_issued tracks the actual dpkg spawn; the classifier's execution_began
+     * stays `entered` so a pending set left incomplete (e.g. the lock hand-off
+     * failed before dpkg ran) is still reported BROKEN via the scan, not masked as
+     * not-applied. configure has no fetch phase, so entering means dpkg is
+     * attempted; read the shared ground truth once it did. */
+    *effect_issued = cc.issued ? 1 : 0;
     int broken = cc.entered ? (pkgx_apt_ground_truth_broken() ? 1 : 0) : 0;
     pkgx_apt_status st = pkgx_txn_classify(cc.entered, cc.entered ? 1 : 0,
                                            cc.ran_ok ? 1 : 0, broken);
