@@ -4,9 +4,11 @@
 *.so
 /build/
 /build-*/
-# per-verb effector binaries + spike probes
+/build-test-*
+# per-verb effector binaries + spike/diagnostic tools
 /runix-apt-*
 /pkgexec-probe
+/pkgexec-plan
 # fuzzer (the seed corpus in fuzz/corpus/*.json is tracked)
 /fuzz-request
 crash-*

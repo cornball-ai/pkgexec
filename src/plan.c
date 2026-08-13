@@ -13,6 +13,13 @@ pkgx_plan_result pkgx_plan_and_redeem(
     const char **detail) {
     *detail = "";
 
+    /* An empty resolved transaction is a no-op (already-current install, absent
+     * removal): no effect is issued, so the receipt is left unspent. */
+    if (nrecs == 0) {
+        *detail = "no_op";
+        return PKGX_PLAN_NO_OP;
+    }
+
     /* Policy first: a refused plan must never spend the receipt. */
     const char *offender = NULL;
     switch (pkgx_policy_check(recs, nrecs, &offender)) {

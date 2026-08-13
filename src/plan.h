@@ -16,6 +16,7 @@
 
 typedef enum {
     PKGX_PLAN_OK = 0,      /* policy passed, receipt redeemed: a commit would follow */
+    PKGX_PLAN_NO_OP,       /* empty resolved transaction: no effect, receipt unspent */
     PKGX_PLAN_NOT_OWNED,   /* rapt-owned package in the plan */
     PKGX_PLAN_HELD,        /* a held package would change */
     PKGX_PLAN_PROTECTED,   /* Essential/protected removal */

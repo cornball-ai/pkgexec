@@ -5,13 +5,16 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* The closed set of receipt error codes a redeem reply may carry. Anything
- * else (including a generic bad_json/schema_invalid/unknown_request that would
- * mean our own request was malformed) is treated as a protocol violation — the
- * helper refuses either way, but only these are the contract's redeem errors. */
+/* The closed set of error codes a redeem reply may legitimately carry: the six
+ * receipt_* verdicts plus the broker's operational refusals rate_limited and
+ * persist_failed (runix-audit-broker src/broker.c, handle_redeem). Anything else
+ * — a generic bad_json/schema_invalid/unknown_request that would mean our own
+ * request was malformed — is a protocol violation; the helper refuses either
+ * way, but only these are the contract's redeem errors. */
 static const char *const REDEEM_ERRORS[] = {
-    "receipt_invalid",      "receipt_expired",       "receipt_redeemed",
-    "receipt_mismatch",     "receipt_unauthorized",  "receipt_actor_mismatch"};
+    "receipt_invalid",       "receipt_expired",  "receipt_redeemed",
+    "receipt_mismatch",      "receipt_unauthorized", "receipt_actor_mismatch",
+    "rate_limited",          "persist_failed"};
 
 static const char *known_error(const char *code) {
     for (size_t i = 0; i < sizeof REDEEM_ERRORS / sizeof *REDEEM_ERRORS; i++) {

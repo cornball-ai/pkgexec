@@ -29,7 +29,7 @@ PREFIX ?= /usr
 DOCDIR ?= $(PREFIX)/share/doc/pkgexec
 
 .PHONY: all check test-digest test-request test-harden test-exec-child \
-        test-redeem test-policy test-plan fuzz probe plan clean install
+        test-redeem test-policy test-plan test-rapt fuzz probe plan clean install
 
 all: libpkgexec.a
 
@@ -41,7 +41,7 @@ libpkgexec.a: src/digest.c src/request.c src/harden.c src/redeem.c src/policy.c 
 	ar rcs $@ digest.o request.o harden.o redeem.o policy.o plan.o
 
 check: test-digest test-request test-harden test-exec-child \
-       test-redeem test-policy test-plan
+       test-redeem test-policy test-plan test-rapt
 
 # Schema-1 digest encoder vs the shared golden corpus (Jansson + libcrypto).
 test-digest: src/digest.c tests/test_digest.c
@@ -82,6 +82,12 @@ test-plan: src/plan.c src/policy.c src/redeem.c src/digest.c tests/test_plan.c
 	    $^ -o build-test-plan $(JSON_LIBS) $(CRYPTO_LIBS)
 	./build-test-plan
 
+# Cross-repo drift alarm: the pinned rapt ownership predicate still matches rapt's
+# source (skips where rapt is not checked out, e.g. CI).
+test-rapt: tests/test_rapt.c
+	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(SAN) $^ -o build-test-rapt
+	./build-test-rapt
+
 # Request-parser fuzzing. Requires clang (libFuzzer): make fuzz CC=clang
 fuzz: fuzz/fuzz_request.c src/request.c
 	$(CC) $(CPPFLAGS) -std=c11 $(JSON_CFLAGS) \
@@ -106,7 +112,7 @@ clean:
 	rm -f libpkgexec.a digest.o request.o harden.o redeem.o policy.o plan.o \
 	    build-test-digest build-test-request build-test-harden \
 	    build-test-exec-child build-test-redeem build-test-policy \
-	    build-test-plan fuzz-request pkgexec-probe pkgexec-plan
+	    build-test-plan build-test-rapt fuzz-request pkgexec-probe pkgexec-plan
 
 # Slice 1 installs docs + the corpus only (no entrypoint yet), so the .deb has a
 # meaningful build/install smoke while remaining incapable of mutation.
