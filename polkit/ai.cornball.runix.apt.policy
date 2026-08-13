@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Runix apt effector actions. Each apt verb is a DISTINCT, immutable entrypoint
+  path bound to its own action (pkexec selects the action by exec.path, never by
+  argv), so the verb cannot be an argument and no umbrella action exists. Every
+  action defaults to auth_admin; the shipped rules file (49-runix-apt-autonomous)
+  is what grants ONLY apt.update and apt.hold, and ONLY to the empty
+  runix-apt-autonomous group, non-interactively. See docs
+  apt-mutation-boundary-contract.md.
+-->
+<policyconfig>
+  <vendor>Runix</vendor>
+  <vendor_url>https://github.com/cornball-ai/pkgexec</vendor_url>
+
+  <action id="ai.cornball.runix.apt.update">
+    <description>Refresh the apt package indexes</description>
+    <message>Authentication is required to refresh the apt package indexes</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/pkgexec/runix-apt-update</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">false</annotate>
+  </action>
+
+  <action id="ai.cornball.runix.apt.install">
+    <description>Install apt packages</description>
+    <message>Authentication is required to install apt packages</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/pkgexec/runix-apt-install</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">false</annotate>
+  </action>
+
+  <action id="ai.cornball.runix.apt.remove">
+    <description>Remove apt packages</description>
+    <message>Authentication is required to remove apt packages</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/pkgexec/runix-apt-remove</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">false</annotate>
+  </action>
+
+  <action id="ai.cornball.runix.apt.purge">
+    <description>Purge apt packages</description>
+    <message>Authentication is required to purge apt packages</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/pkgexec/runix-apt-purge</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">false</annotate>
+  </action>
+
+  <action id="ai.cornball.runix.apt.upgrade">
+    <description>Upgrade installed apt packages</description>
+    <message>Authentication is required to upgrade installed apt packages</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/pkgexec/runix-apt-upgrade</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">false</annotate>
+  </action>
+
+  <action id="ai.cornball.runix.apt.dist_upgrade">
+    <description>Distribution-upgrade apt packages</description>
+    <message>Authentication is required to distribution-upgrade apt packages</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/pkgexec/runix-apt-dist-upgrade</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">false</annotate>
+  </action>
+
+  <action id="ai.cornball.runix.apt.configure">
+    <description>Finish pending apt package configuration</description>
+    <message>Authentication is required to finish pending apt package configuration</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/pkgexec/runix-apt-configure</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">false</annotate>
+  </action>
+
+  <action id="ai.cornball.runix.apt.hold">
+    <description>Hold apt packages at their current version</description>
+    <message>Authentication is required to hold apt packages</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/pkgexec/runix-apt-hold</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">false</annotate>
+  </action>
+
+  <action id="ai.cornball.runix.apt.unhold">
+    <description>Release apt package holds</description>
+    <message>Authentication is required to release apt package holds</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/pkgexec/runix-apt-unhold</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">false</annotate>
+  </action>
+</policyconfig>

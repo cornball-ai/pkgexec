@@ -1,0 +1,21 @@
+// Runix apt effector: autonomous-verb grant.
+//
+// apt.update and apt.hold are requires_authorization=TRUE but
+// approval_required=FALSE — an agent runs them with no human in the loop, which
+// polkit must authorize NON-INTERACTIVELY. This rule grants exactly those two
+// actions, and ONLY to members of the system group runix-apt-autonomous (created
+// empty by the package, never auto-enrolled). Every other Runix apt action has no
+// rule here and falls through to its auth_admin default in the .policy — a human
+// at a TTY, and a `challenge` (not a prompt) for a non-interactive machine check.
+//
+// The grant is on the GROUP, not a UID: membership is an explicit operator act.
+// A deployment where an agent must not share a human UID's grant runs it under a
+// dedicated service account added to this group. See docs
+// apt-mutation-boundary-contract.md.
+polkit.addRule(function(action, subject) {
+    if ((action.id == "ai.cornball.runix.apt.update" ||
+         action.id == "ai.cornball.runix.apt.hold") &&
+        subject.isInGroup("runix-apt-autonomous")) {
+        return polkit.Result.YES;
+    }
+});

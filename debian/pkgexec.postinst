@@ -1,0 +1,19 @@
+#!/bin/sh
+# Create the autonomous-verb group. It is created EMPTY and never auto-enrolled:
+# the polkit rule grants apt.update/apt.hold non-interactively to its members, so
+# enrolling an account is a deliberate operator act, not a package default.
+set -e
+
+case "$1" in
+    configure)
+        if ! getent group runix-apt-autonomous >/dev/null; then
+            addgroup --system runix-apt-autonomous
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

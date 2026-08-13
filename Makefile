@@ -29,6 +29,9 @@ SAN := -fsanitize=address,undefined -g
 
 PREFIX ?= /usr
 DOCDIR ?= $(PREFIX)/share/doc/pkgexec
+LIBEXECDIR ?= $(PREFIX)/libexec/pkgexec
+POLKIT_ACTIONDIR ?= $(PREFIX)/share/polkit-1/actions
+POLKIT_RULESDIR ?= $(PREFIX)/share/polkit-1/rules.d
 
 .PHONY: all check test-digest test-request test-harden test-exec-child \
         test-redeem test-policy test-plan test-effect test-apt-outcome \
@@ -235,9 +238,19 @@ clean:
 	    build-test-rapt build-test-transport fuzz-request pkgexec-probe \
 	    pkgexec-plan pkgexec-effect entrypoint-runix-apt-*.o runix-apt-*
 
-# Slice 1 installs docs + the corpus only (no entrypoint yet), so the .deb has a
-# meaningful build/install smoke while remaining incapable of mutation.
-install: all
+# Install docs + corpus, the nine per-verb entrypoints (each to the immutable path
+# its polkit action names), and the polkit action + autonomous-verb rule. The
+# runix-apt-autonomous group is created by the package's postinst, not here.
+install: all entrypoints
 	install -D -m 0644 README.md $(DESTDIR)$(DOCDIR)/README.md
 	install -D -m 0644 tests/fixtures/plan-digest/vectors.json \
 	    $(DESTDIR)$(DOCDIR)/plan-digest-vectors.json
+	@for spec in $(ENTRY_SPECS); do \
+	    bin=$${spec##*:}; \
+	    echo "  INSTALL $(LIBEXECDIR)/$$bin"; \
+	    install -D -m 0755 $$bin $(DESTDIR)$(LIBEXECDIR)/$$bin || exit 1; \
+	done
+	install -D -m 0644 polkit/ai.cornball.runix.apt.policy \
+	    $(DESTDIR)$(POLKIT_ACTIONDIR)/ai.cornball.runix.apt.policy
+	install -D -m 0644 polkit/49-runix-apt-autonomous.rules \
+	    $(DESTDIR)$(POLKIT_RULESDIR)/49-runix-apt-autonomous.rules
