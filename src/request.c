@@ -25,8 +25,8 @@ static int is_lc_hex(const char *s, size_t n) {
 }
 
 /* Broker correlation id: exactly 20 digits, '-', 16 lowercase hex. */
-static int cid_ok(const char *s) {
-    if (strlen(s) != 20 + 1 + 16) {
+int pkgx_cid_valid(const char *s) {
+    if (s == NULL || strlen(s) != 20 + 1 + 16) {
         return 0;
     }
     for (int i = 0; i < 20; i++) {
@@ -288,7 +288,7 @@ int pkgx_parse_request(const char *verb, const char *body, size_t len,
     memcpy(out->effect_receipt, rcpt, PKGX_RECEIPT_HEXLEN + 1);
 
     const char *cid = str_clean(json_object_get(root, "correlation_id"));
-    if (cid == NULL || !cid_ok(cid)) {
+    if (cid == NULL || !pkgx_cid_valid(cid)) {
         goto fail;
     }
     strcpy(out->correlation_id, cid);

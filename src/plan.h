@@ -59,7 +59,9 @@ pkgx_plan_result pkgx_plan_and_redeem_hold(
     const char **detail);
 
 /* apt.configure: finish the pending-configuration set (`dpkg --configure -a`).
- * The set is not selectable, so there is no pre-commit package policy; the
+ * The set is not selectable, but ownership still applies — configuring an r-*
+ * package runs its maintainer scripts — so a rapt-owned member is
+ * PKGX_PLAN_NOT_OWNED (detail = it) before the receipt is spent. The
  * broken-state check is post-commit (C++ effector). resource is the fixed token
  * "pending"; the digest binds the pending set. */
 pkgx_plan_result pkgx_plan_and_redeem_configure(

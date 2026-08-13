@@ -2,6 +2,8 @@
  * decision, so the security property is one readable switch. */
 #include "effect.h"
 
+#include "request.h" /* pkgx_cid_valid */
+
 #include <stddef.h>
 
 pkgx_effect_status pkgx_effect_gate(pkgx_plan_result pr, const char *validated_cid,
@@ -12,6 +14,12 @@ pkgx_effect_status pkgx_effect_gate(pkgx_plan_result pr, const char *validated_c
          * result that reaches here as OK; commit in the retained context. */
         if (commit == NULL) {
             return PKGX_EFFECT_COMMIT_FAILED; /* fail closed, never silent-ok */
+        }
+        /* Do not commit under a missing or malformed cid: the committer stamps
+         * it into the native transaction record, so revalidate the exact grammar
+         * here rather than trust the enum. */
+        if (!pkgx_cid_valid(validated_cid)) {
+            return PKGX_EFFECT_COMMIT_FAILED;
         }
         if (commit(commit_ctx, validated_cid) != 0) {
             return PKGX_EFFECT_COMMIT_FAILED;

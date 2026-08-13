@@ -87,9 +87,10 @@ test-plan: src/plan.c src/policy.c src/redeem.c src/digest.c tests/test_plan.c
 	./build-test-plan
 
 # Commit gate + the four per-mechanism plan variants: the committer fires iff a
-# validated redeem_ok (fake transport + fake committer; no libapt, no broker).
+# validated redeem_ok, and the gate revalidates the cid via request.c's grammar
+# (fake transport + fake committer; no libapt, no broker).
 test-effect: src/effect.c src/plan.c src/policy.c src/redeem.c src/digest.c \
-             tests/test_effect.c
+             src/request.c tests/test_effect.c
 	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(JSON_CFLAGS) $(CRYPTO_CFLAGS) $(SAN) \
 	    $^ -o build-test-effect $(JSON_LIBS) $(CRYPTO_LIBS)
 	./build-test-effect

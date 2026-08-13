@@ -47,6 +47,12 @@ int pkgx_read_stdin_deadline(int fd, char **body, size_t *len,
  * does not linger in freed memory. A no-op on NULL. */
 void pkgx_secure_wipe(void *p, size_t n);
 
+/* The broker correlation-id grammar: exactly 20 digits, '-', 16 lowercase hex.
+ * Exposed so the commit gate can revalidate a cid before it commits under it,
+ * reusing this one definition rather than trusting an upstream check. Returns 1
+ * if `s` matches, 0 otherwise (including NULL). */
+int pkgx_cid_valid(const char *s);
+
 /* Parse+validate `body` for `verb` (the entrypoint's compile-time verb, one of
  * the nine apt.* strings). Strict: rejects duplicate keys, trailing content,
  * unknown members, missing members, depth > PKGX_MAX_DEPTH, a receipt that is

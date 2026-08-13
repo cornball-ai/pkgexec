@@ -143,8 +143,18 @@ pkgx_plan_result pkgx_plan_and_redeem_configure(
         *detail = "no_op";
         return PKGX_PLAN_NO_OP;
     }
-    /* The pending-config set is not selectable, so no pre-commit package policy;
-     * the broken-state check is post-commit (C++ effector). */
+    /* Ownership still applies. The pending set is not selectable, but
+     * configuring an r-* package runs its maintainer scripts — a mutation of a
+     * rapt-owned package — so any rapt-owned member fails the whole configure
+     * before the receipt is spent. The post-commit broken-state check is the
+     * C++ effector's. */
+    for (size_t i = 0; i < ncfgs; i++) {
+        const char *nm = cfgs[i].package != NULL ? cfgs[i].package : "";
+        if (pkgx_is_rapt_owned(nm)) {
+            *detail = cfgs[i].package;
+            return PKGX_PLAN_NOT_OWNED;
+        }
+    }
     char hash[PKGEXEC_DIGEST_HEX + 1];
     if (pkgx_digest_configure(cfgs, ncfgs, hash, NULL, NULL) != 0) {
         return PKGX_PLAN_INTERNAL;

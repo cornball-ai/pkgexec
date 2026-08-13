@@ -35,8 +35,10 @@ typedef enum {
 } pkgx_effect_status;
 
 /* Invoke `commit` iff `pr == PKGX_PLAN_OK`, handing it `validated_cid`; any
- * other plan result commits nothing. A NULL committer on an OK plan is a
- * programming error and fails closed as PKGX_EFFECT_COMMIT_FAILED (never a
+ * other plan result commits nothing. On an OK plan the cid is revalidated
+ * against the broker grammar (pkgx_cid_valid) before the committer runs, so a
+ * missing or malformed cid never reaches the native-transaction marker; that
+ * and a NULL committer both fail closed as PKGX_EFFECT_COMMIT_FAILED (never a
  * silent success). This is the only sanctioned path to a commit. */
 pkgx_effect_status pkgx_effect_gate(pkgx_plan_result pr, const char *validated_cid,
                                     pkgx_committer commit, void *commit_ctx);
