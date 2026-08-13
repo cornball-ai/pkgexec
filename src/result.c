@@ -1,8 +1,11 @@
 /* See result.h. */
 #include "result.h"
 
+#include <errno.h>
 #include <jansson.h>
+#include <signal.h>
 #include <string.h>
+#include <unistd.h>
 
 const char *pkgx_status_name(pkgx_apt_status st) {
     switch (st) {
@@ -71,4 +74,49 @@ int pkgx_result_json(pkgx_apt_status st, int effect_issued,
     memcpy(out, s, n + 1);
     free(s);
     return (int) n;
+}
+
+int pkgx_result_emit(int fd, pkgx_apt_status st, int effect_issued,
+                     const char *correlation_id, const char *detail) {
+    char buf[512];
+    int n = pkgx_result_json(st, effect_issued, correlation_id, detail, buf,
+                             sizeof buf);
+    if (n < 0) {
+        return -1;
+    }
+    buf[n] = '\n'; /* pkgx_result_json wrote n bytes + NUL, and n < sizeof buf */
+    size_t total = (size_t) n + 1;
+
+    /* Ignore SIGPIPE for the write so a result pipe the caller already closed
+     * yields EPIPE (which we detect) instead of killing this process — a closed
+     * result channel must be a reported failure, not a signal death that could
+     * look like a clean exit. */
+    struct sigaction ign, old;
+    memset(&ign, 0, sizeof ign);
+    ign.sa_handler = SIG_IGN;
+    sigemptyset(&ign.sa_mask);
+    if (sigaction(SIGPIPE, &ign, &old) != 0) {
+        return -1; /* fail closed: cannot guarantee the write is observable */
+    }
+    int rc = 0;
+    size_t off = 0;
+    while (off < total) {
+        ssize_t w = write(fd, buf + off, total - off);
+        if (w < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            rc = -1; /* EPIPE (closed pipe) or other I/O error */
+            break;
+        }
+        if (w == 0) {
+            rc = -1;
+            break;
+        }
+        off += (size_t) w;
+    }
+    if (sigaction(SIGPIPE, &old, NULL) != 0) {
+        rc = -1; /* restoration failed: report so the caller does not trust it */
+    }
+    return rc;
 }

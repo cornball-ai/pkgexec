@@ -9,6 +9,7 @@
 #include <jansson.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 static int checks = 0;
 static int failures = 0;
@@ -136,6 +137,40 @@ int main(void) {
     int n = pkgx_result_json(PKGX_APT_OK, 1, "x", "y", tiny, sizeof tiny);
     CHECK(n < 0, "tiny buffer -> -1");
     CHECK(tiny[0] == 'Z', "tiny buffer: out untouched on failure");
+
+    /* --- pkgx_result_emit writes the record + newline in full --- */
+    int pfd[2];
+    if (pipe(pfd) == 0) {
+        int rc = pkgx_result_emit(pfd[1], PKGX_APT_OK, 1, "cid", "ok");
+        close(pfd[1]);
+        CHECK(rc == 0, "emit: full write to an open pipe -> 0");
+        char rbuf[512];
+        ssize_t got = read(pfd[0], rbuf, sizeof rbuf - 1);
+        close(pfd[0]);
+        CHECK(got > 1, "emit: record read back");
+        if (got > 1) {
+            CHECK(rbuf[got - 1] == '\n', "emit: trailing newline");
+            rbuf[got - 1] = '\0'; /* drop newline, parse the JSON */
+            json_error_t err;
+            json_t *o2 = json_loads(rbuf, 0, &err);
+            CHECK(o2 != NULL, "emit: payload is valid JSON");
+            if (o2 != NULL) {
+                CHECK(is_bool_eq(o2, "effect_issued", 1),
+                      "emit: effect_issued carried");
+                json_decref(o2);
+            }
+        }
+    }
+
+    /* --- emit to a closed result pipe fails (never a silent success), and the
+     * SIGPIPE that a naive write would raise must NOT kill this process. --- */
+    int cfd[2];
+    if (pipe(cfd) == 0) {
+        close(cfd[0]); /* reader gone */
+        int rc = pkgx_result_emit(cfd[1], PKGX_APT_OK, 0, "", "ok");
+        close(cfd[1]);
+        CHECK(rc == -1, "emit: closed pipe -> -1, process survived");
+    }
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

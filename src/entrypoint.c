@@ -29,6 +29,18 @@
 #include <string.h>
 #include <unistd.h>
 
+/* Every helper-executed failure reports through the SAME result channel: an
+ * internal status, effect_issued=false (nothing ran), the correlation id if the
+ * request parsed (else ""), and a detail tag. stderr is reserved for the one thing
+ * the channel itself cannot report — a failure to serialize or write the record.
+ * Returns the process exit code (always 1: a reported failure is still a failure). */
+static int fail_result(const char *cid, const char *detail) {
+    if (pkgx_result_emit(STDOUT_FILENO, PKGX_APT_INTERNAL, 0, cid, detail) != 0) {
+        fprintf(stderr, "result: could not emit\n");
+    }
+    return 1;
+}
+
 int main(void) {
     /* The verb is fixed at build time. argv is deliberately never consulted. */
     const char *verb = PKGX_VERB;
@@ -36,17 +48,16 @@ int main(void) {
     /* Trusted uid first — before the environment is scrubbed. */
     uid_t uid = 0;
     if (pkgx_read_pkexec_uid(&uid) != 0) {
-        fprintf(stderr, "PKEXEC_UID missing or invalid\n");
-        return 1;
+        return fail_result("", "pkexec_uid");
     }
 
-    /* Parse the request off fd 0 while it is still the caller's pipe. */
+    /* Parse the request off fd 0 while it is still the caller's pipe. The reader
+     * wipes any partial buffer on error, so a receipt is never leaked. */
     char *body = NULL;
     size_t len = 0;
     const char *ec = NULL;
     if (pkgx_read_stdin(STDIN_FILENO, &body, &len, &ec) != 0) {
-        fprintf(stderr, "stdin: %s\n", ec ? ec : "io");
-        return 1;
+        return fail_result("", ec ? ec : "stdin");
     }
     pkgx_request req;
     const char *pe = NULL;
@@ -54,16 +65,16 @@ int main(void) {
     pkgx_secure_wipe(body, len); /* the body carried the receipt */
     free(body);
     if (prc != 0) {
-        fprintf(stderr, "parse: %s\n", pe ? pe : "schema_invalid");
-        return 1;
+        /* Parsing never completed: no correlation id to report. */
+        return fail_result("", pe ? pe : "schema_invalid");
     }
 
     /* Hygiene before any dpkg/maintainer script runs — fail closed. */
     if (pkgx_scrub_env() != 0 || pkgx_null_stdin() != 0 ||
         pkgx_cloexec_from(3) != 0) {
+        int rc = fail_result(req.correlation_id, "hygiene");
         pkgx_request_free(&req);
-        fprintf(stderr, "hygiene: environment/fd hardening failed\n");
-        return 1;
+        return rc;
     }
 
     pkgx_transport tx;
@@ -99,14 +110,14 @@ int main(void) {
 #error "define exactly one PKGX_FAMILY_{TXN,UPDATE,HOLD,CONFIGURE}"
 #endif
 
-    /* The result channel: one strict JSON object with a first-class effect_issued. */
-    char result[512];
-    if (pkgx_result_json(st, issued, out_cid, detail, result, sizeof result) < 0) {
-        pkgx_request_free(&req);
-        fprintf(stderr, "result: could not serialize\n");
+    /* The result channel: one strict JSON object with a first-class effect_issued,
+     * written in full (a closed/short result pipe is a reported failure, exit 1,
+     * never an apparent success). */
+    int emitted = pkgx_result_emit(STDOUT_FILENO, st, issued, out_cid, detail);
+    pkgx_request_free(&req);
+    if (emitted != 0) {
+        fprintf(stderr, "result: could not emit\n");
         return 1;
     }
-    printf("%s\n", result);
-    pkgx_request_free(&req);
     return (st == PKGX_APT_OK || st == PKGX_APT_NO_OP) ? 0 : 1;
 }

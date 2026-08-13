@@ -166,20 +166,22 @@ int pkgx_read_stdin_deadline(int fd, char **body, size_t *len,
         *errcode = "io";
         return -1;
     }
+    /* Every failure below jumps to `fail`, which wipes the partial buffer before
+     * freeing it: a partial read can already hold the effect-receipt token, so a
+     * timeout / I/O / allocation / oversize error must never leak it to freed
+     * heap. Only a clean EOF reaches the success return with an intact buffer. */
     for (;;) {
         struct timespec now;
         if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
-            free(buf);
             *errcode = "io";
-            return -1;
+            goto fail;
         }
         long elapsed = (now.tv_sec - start.tv_sec) * 1000 +
                        (now.tv_nsec - start.tv_nsec) / 1000000;
         long remaining = deadline_ms - elapsed;
         if (remaining <= 0) {
-            free(buf);
             *errcode = "deadline";
-            return -1;
+            goto fail;
         }
         struct pollfd pfd = {.fd = fd, .events = POLLIN};
         int pr = poll(&pfd, 1, (int) remaining);
@@ -187,14 +189,12 @@ int pkgx_read_stdin_deadline(int fd, char **body, size_t *len,
             if (errno == EINTR) {
                 continue;
             }
-            free(buf);
             *errcode = "io";
-            return -1;
+            goto fail;
         }
         if (pr == 0) {
-            free(buf);
             *errcode = "deadline";
-            return -1;
+            goto fail;
         }
         if (n == cap) {
             size_t nc = cap * 2;
@@ -203,9 +203,8 @@ int pkgx_read_stdin_deadline(int fd, char **body, size_t *len,
             }
             char *nb = realloc(buf, nc + 1);
             if (nb == NULL) {
-                free(buf);
-                *errcode = "io";
-                return -1;
+                *errcode = "io"; /* buf still valid; wiped at fail */
+                goto fail;
             }
             buf = nb;
             cap = nc;
@@ -215,24 +214,26 @@ int pkgx_read_stdin_deadline(int fd, char **body, size_t *len,
             if (errno == EINTR) {
                 continue;
             }
-            free(buf);
             *errcode = "io";
-            return -1;
+            goto fail;
         }
         if (r == 0) {
             break; /* EOF */
         }
         n += (size_t) r;
         if (n > PKGX_MAX_STDIN) {
-            free(buf);
             *errcode = "too_large";
-            return -1;
+            goto fail;
         }
     }
     buf[n] = '\0';
     *body = buf;
     *len = n;
     return 0;
+fail:
+    pkgx_secure_wipe(buf, n); /* n bytes read so far may contain the receipt */
+    free(buf);
+    return -1;
 }
 
 int pkgx_read_stdin(int fd, char **body, size_t *len, const char **errcode) {

@@ -30,6 +30,15 @@ int pkgx_result_json(pkgx_apt_status st, int effect_issued,
                      const char *correlation_id, const char *detail, char *out,
                      size_t outlen);
 
+/* Serialize the result and write it in full — the JSON object then a newline — to
+ * `fd`. SIGPIPE is ignored for the write, so a result pipe the caller already
+ * closed yields a reported failure rather than killing the process. Returns 0 only
+ * when the entire record was written; -1 if serialization failed or the write did
+ * not complete (a closed or short result channel must never read as success).
+ * Failing to emit this record is the ONLY thing a helper reports out-of-band. */
+int pkgx_result_emit(int fd, pkgx_apt_status st, int effect_issued,
+                     const char *correlation_id, const char *detail);
+
 #ifdef __cplusplus
 }
 #endif
