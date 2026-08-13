@@ -31,20 +31,21 @@ PREFIX ?= /usr
 DOCDIR ?= $(PREFIX)/share/doc/pkgexec
 
 .PHONY: all check test-digest test-request test-harden test-exec-child \
-        test-redeem test-policy test-plan test-rapt test-transport fuzz probe \
-        plan clean install
+        test-redeem test-policy test-plan test-effect test-rapt test-transport \
+        fuzz probe plan effect clean install
 
 all: libpkgexec.a
 
 # The non-privileged production sources, compiled hardened into a static lib —
 # a compile gate (no mutation-capable entrypoint yet).
 libpkgexec.a: src/digest.c src/request.c src/harden.c src/redeem.c src/policy.c \
-              src/plan.c src/transport.c
+              src/plan.c src/effect.c src/transport.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(JSON_CFLAGS) $(CRYPTO_CFLAGS) -c $^
-	ar rcs $@ digest.o request.o harden.o redeem.o policy.o plan.o transport.o
+	ar rcs $@ digest.o request.o harden.o redeem.o policy.o plan.o effect.o \
+	    transport.o
 
 check: test-digest test-request test-harden test-exec-child \
-       test-redeem test-policy test-plan test-rapt test-transport
+       test-redeem test-policy test-plan test-effect test-rapt test-transport
 
 # Schema-1 digest encoder vs the shared golden corpus (Jansson + libcrypto).
 test-digest: src/digest.c tests/test_digest.c
@@ -85,6 +86,14 @@ test-plan: src/plan.c src/policy.c src/redeem.c src/digest.c tests/test_plan.c
 	    $^ -o build-test-plan $(JSON_LIBS) $(CRYPTO_LIBS)
 	./build-test-plan
 
+# Commit gate + the four per-mechanism plan variants: the committer fires iff a
+# validated redeem_ok (fake transport + fake committer; no libapt, no broker).
+test-effect: src/effect.c src/plan.c src/policy.c src/redeem.c src/digest.c \
+             tests/test_effect.c
+	$(CC) $(CPPFLAGS) -std=c11 $(WARN) $(JSON_CFLAGS) $(CRYPTO_CFLAGS) $(SAN) \
+	    $^ -o build-test-effect $(JSON_LIBS) $(CRYPTO_LIBS)
+	./build-test-effect
+
 # Cross-repo drift alarm: the pinned rapt ownership predicate still matches rapt's
 # source (skips where rapt is not checked out, e.g. CI).
 test-rapt: tests/test_rapt.c
@@ -120,10 +129,11 @@ plan: tools/plan.cc src/digest.c src/policy.c
 
 clean:
 	rm -f libpkgexec.a digest.o request.o harden.o redeem.o policy.o plan.o \
-	    transport.o build-test-digest build-test-request build-test-harden \
-	    build-test-exec-child build-test-redeem build-test-policy \
-	    build-test-plan build-test-rapt build-test-transport fuzz-request \
-	    pkgexec-probe pkgexec-plan
+	    effect.o transport.o build-test-digest build-test-request \
+	    build-test-harden build-test-exec-child build-test-redeem \
+	    build-test-policy build-test-plan build-test-effect build-test-rapt \
+	    build-test-transport fuzz-request pkgexec-probe pkgexec-plan \
+	    pkgexec-effect apt_resolve.o apt_commit.o
 
 # Slice 1 installs docs + the corpus only (no entrypoint yet), so the .deb has a
 # meaningful build/install smoke while remaining incapable of mutation.
