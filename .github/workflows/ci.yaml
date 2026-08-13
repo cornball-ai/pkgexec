@@ -18,14 +18,27 @@ jobs:
             build-essential clang pkg-config \
             libjansson-dev libssl-dev libapt-pkg-dev
 
+      - name: Check out rapt (ownership-predicate drift gate)
+        uses: actions/checkout@v6
+        with:
+          repository: cornball-ai/rapt
+          path: rapt-src
+
       - name: Tests (ASan/UBSan)
         run: make check
+
+      - name: rapt predicate drift gate
+        # PKGEXEC_RAPT_MANAGER set => absence is a failure, not a skip.
+        run: PKGEXEC_RAPT_MANAGER="$GITHUB_WORKSPACE/rapt-src/r-pkg/R/manager.R" make test-rapt
 
       - name: Hardened build gate
         run: make clean && make all
 
       - name: Read-only libapt-pkg API probe (step 0)
         run: make probe && ./pkgexec-probe bash
+
+      - name: Locked libapt resolve — link check (slice 2, not run in CI)
+        run: make plan   # compile+link only; runtime takes the dpkg lock (VM-gated)
 
       - name: Fuzz the request parser
         run: |
