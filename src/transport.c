@@ -62,13 +62,20 @@ static int wait_fd(int fd, short events, const struct timespec *dl) {
     }
 }
 
-/* Write exactly n bytes before the deadline. 0 ok, -1 error, -2 timeout. */
+/* Write exactly n bytes before the deadline. 0 ok, -1 error, -2 timeout. Uses
+ * send(MSG_NOSIGNAL) so a peer that closes after authentication yields EPIPE
+ * here rather than a process-killing SIGPIPE — the production disposition must
+ * not depend on the caller masking the signal. The deadline is re-checked
+ * before every send, so continuous single-byte progress cannot outrun it. */
 static int write_full(int fd, const void *buf, size_t n,
                       const struct timespec *dl) {
     const unsigned char *p = buf;
     size_t sent = 0;
     while (sent < n) {
-        ssize_t w = write(fd, p + sent, n - sent);
+        if (ms_left(dl) <= 0) {
+            return -2;
+        }
+        ssize_t w = send(fd, p + sent, n - sent, MSG_NOSIGNAL);
         if (w < 0) {
             if (errno == EINTR) {
                 continue;
@@ -82,16 +89,25 @@ static int write_full(int fd, const void *buf, size_t n,
             }
             return -1;
         }
+        if (w == 0) {
+            return -1; /* unexpected for n > 0: fail rather than spin */
+        }
         sent += (size_t) w;
     }
     return 0;
 }
 
-/* Read exactly n bytes before the deadline. 0 ok, 1 EOF, -1 error, -2 timeout. */
+/* Read exactly n bytes before the deadline. 0 ok, 1 EOF, -1 error, -2 timeout.
+ * The deadline is re-checked before every read, so a peer that trickles bytes
+ * indefinitely (always making a little progress, never blocking to EAGAIN)
+ * still hits the budget. */
 static int read_full(int fd, void *buf, size_t n, const struct timespec *dl) {
     unsigned char *p = buf;
     size_t got = 0;
     while (got < n) {
+        if (ms_left(dl) <= 0) {
+            return -2;
+        }
         ssize_t r = read(fd, p + got, n - got);
         if (r < 0) {
             if (errno == EINTR) {
@@ -139,16 +155,20 @@ static int connect_deadline(const char *path, const struct timespec *dl,
         }
         if (errno == EINTR || errno == EINPROGRESS) {
             /* completion is signalled by POLLOUT; the result is SO_ERROR */
-            if (wait_fd(fd, POLLOUT, dl) == 0) {
+            int wr = wait_fd(fd, POLLOUT, dl);
+            if (wr == 0) {
                 int soerr = 0;
                 socklen_t sl = sizeof soerr;
                 if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &soerr, &sl) == 0 &&
                     soerr == 0) {
                     return fd;
                 }
+                close(fd);
+                *err = "connect";
+                return -1;
             }
             close(fd);
-            *err = "connect";
+            *err = (wr == -2) ? "deadline" : "connect"; /* keep a real timeout */
             return -1;
         }
         if (errno == EAGAIN) {

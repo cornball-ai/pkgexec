@@ -49,7 +49,9 @@ typedef enum {
     SRV_STALL,    /* read frame, never reply, exit after the client's budget */
     SRV_BADVER,   /* reply with version 2 */
     SRV_TOOLARGE, /* reply header claims a body over the maximum */
-    SRV_TRUNC     /* reply header claims 100 bytes, send 10, close */
+    SRV_TRUNC,    /* reply header claims 100 bytes, send 10, close */
+    SRV_CLOSE,    /* accept, then close immediately (peer gone after auth) */
+    SRV_TRICKLE   /* reply one byte at a time, slower than the client's budget */
 } srv_mode;
 
 /* ---- blocking helpers for the fake server (child process) -------------- */
@@ -132,8 +134,11 @@ static int srv_reply(int cfd, unsigned ver, uint32_t claim, const char *body,
 }
 
 /* The fake server body: accept exactly one connection and act out `mode`.
- * The exit status carries the server-side assertion. */
+ * The exit status carries the server-side assertion. SIGPIPE is ignored in the
+ * CHILD only (this helper writes with write()); the PARENT keeps the default
+ * disposition, so the production transport's MSG_NOSIGNAL is what's under test. */
 static int srv_run(int lfd, srv_mode mode) {
+    signal(SIGPIPE, SIG_IGN);
     int cfd = accept(lfd, NULL, NULL);
     if (cfd < 0) {
         return 9;
@@ -143,6 +148,10 @@ static int srv_run(int lfd, srv_mode mode) {
         ssize_t r = read(cfd, &b, 1);
         close(cfd);
         return (r == 0) ? 0 : 1; /* 0 = EOF with zero bytes, as required */
+    }
+    if (mode == SRV_CLOSE) {
+        close(cfd); /* peer vanishes right after the client authenticated it */
+        return 0;
     }
     uint32_t len = 0;
     char *req = srv_read_frame(cfd, &len);
@@ -177,6 +186,26 @@ static int srv_run(int lfd, srv_mode mode) {
     case SRV_TRUNC:
         rc = srv_reply(cfd, 1, 100, "0123456789", 10) == 0 ? 0 : 1;
         break;
+    case SRV_TRICKLE: {
+        /* A well-formed redeem_ok, but dripped one byte at a time slower than
+         * the client's budget: progress never stalls, yet total duration
+         * exceeds the deadline. Writes may fail once the client gives up and
+         * closes (SIGPIPE is ignored here); that is expected, so exit 0. */
+        unsigned char frame[5 + 128];
+        uint32_t blen = (uint32_t) strlen(REDEEM_OK_BODY);
+        put_hdr(frame, 1, blen);
+        memcpy(frame + 5, REDEEM_OK_BODY, blen);
+        size_t total = 5 + blen;
+        for (size_t i = 0; i < total; i++) {
+            if (full_write(cfd, frame + i, 1) != 0) {
+                break; /* client gave up (deadline); stop dripping */
+            }
+            struct timespec nap = {0, 40L * 1000000L}; /* 40 ms per byte */
+            nanosleep(&nap, NULL);
+        }
+        rc = 0;
+        break;
+    }
     default:
         break;
     }
@@ -259,7 +288,10 @@ static int exchange(const char *path, srv_mode mode, uid_t required_uid,
 }
 
 int main(void) {
-    signal(SIGPIPE, SIG_IGN);
+    /* Deliberately NOT masking SIGPIPE in the parent: the transport must survive
+     * a peer close on its own (send(MSG_NOSIGNAL)). If it regressed to write(),
+     * the peer-close case below would kill this process instead of failing a
+     * check — which is the behaviour we want to catch. */
     char dir[] = "/tmp/pkgx-tx-XXXXXX";
     if (mkdtemp(dir) == NULL) {
         fprintf(stderr, "mkdtemp failed\n");
@@ -300,6 +332,30 @@ int main(void) {
           "stalling server -> err=deadline");
     CHECK(took >= 0 && took < 650, "deadline actually bounded the exchange");
     CHECK(srv == 0, "stall server exited cleanly");
+
+    /* --- peer closes right after authentication: the client must SURVIVE. --
+     * Reaching this assertion at all proves no SIGPIPE killed the process; the
+     * transport reports an ordinary error (EPIPE on send, or EOF on read). */
+    snprintf(path, sizeof path, "%s/close.sock", dir);
+    rc = exchange(path, SRV_CLOSE, getuid(), 2000, &t, &resp, &resplen, &srv,
+                  NULL);
+    CHECK(rc == -1 && t.err != NULL &&
+              (strcmp(t.err, "send") == 0 || strcmp(t.err, "frame_eof") == 0 ||
+               strcmp(t.err, "recv") == 0),
+          "peer close after auth -> ordinary error, process survived (MSG_NOSIGNAL)");
+    CHECK(resp == NULL, "no reply body when the peer vanished");
+
+    /* --- trickled reply: progress never stalls, but total time exceeds the
+     * budget. The deadline must bound total duration, not just idle waits. --- */
+    snprintf(path, sizeof path, "%s/trickle.sock", dir);
+    long long ttook = -1;
+    rc = exchange(path, SRV_TRICKLE, getuid(), 200, &t, &resp, &resplen, &srv,
+                  &ttook);
+    CHECK(rc == -1 && t.err != NULL && strcmp(t.err, "deadline") == 0,
+          "trickled reply slower than the budget -> err=deadline");
+    CHECK(ttook >= 0 && ttook < 650,
+          "deadline bounded a continuously-progressing trickle");
+    CHECK(resp == NULL, "no reply body on a trickle timeout");
 
     /* --- framing strictness on the reply --- */
     snprintf(path, sizeof path, "%s/badver.sock", dir);
