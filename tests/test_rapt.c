@@ -14,7 +14,9 @@
 #define PINNED "^r-[a-z]+-[a-z0-9.]+$"
 
 int main(void) {
-    const char *path = getenv("PKGEXEC_RAPT_MANAGER");
+    const char *env = getenv("PKGEXEC_RAPT_MANAGER");
+    int configured = (env != NULL); /* the CI drift-gate lane sets this */
+    const char *path = env;
     char buf[1024];
     if (path == NULL) {
         const char *home = getenv("HOME");
@@ -25,6 +27,13 @@ int main(void) {
     }
     FILE *f = path ? fopen(path, "rb") : NULL;
     if (f == NULL) {
+        if (configured) {
+            fprintf(stderr,
+                    "FAIL: PKGEXEC_RAPT_MANAGER set but %s is unreadable — the "
+                    "drift gate expects rapt checked out\n",
+                    path);
+            return 1;
+        }
         printf("rapt source not found (%s); skipping cross-repo drift check\n",
                path ? path : "unset");
         return 0;

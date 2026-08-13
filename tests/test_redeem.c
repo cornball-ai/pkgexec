@@ -61,6 +61,9 @@ static int fake_tx(void *ctx, const char *req, size_t reqlen, char **resp,
                   json_integer_value(json_object_get(eff, "plan_schema")) == 1,
               "effect.plan_schema=1");
         CHECK(eff && seq(eff, "plan_hash", HASH), "effect.plan_hash");
+        /* exact schema: no extra top-level or effect keys */
+        CHECK(o && json_object_size(o) == 4, "request has exactly 4 top-level keys");
+        CHECK(eff && json_object_size(eff) == 4, "effect has exactly 4 keys");
         json_decref(o);
     }
     if (f->fail) {

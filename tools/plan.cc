@@ -104,10 +104,11 @@ int main(int argc, char **argv) {
         pkgCache::VerIterator iv = st.InstVerIter(*dc);
         h.from = cur.end() ? "" : cur.VerStr();
         h.to = iv.end() ? "" : iv.VerStr();
-        /* Flags the digest binds. `protected` is a Priority: required package
-         * (apt's protected/required set); Essential/hold/auto are read directly.
-         * StateCache::Protect() is deliberately NOT used — the resolver sets it on
-         * requested targets, a different notion. */
+        /* Flags the digest binds. `essential` and `protected` are distinct apt
+         * package flags: Essential vs Important. `protected` also covers a
+         * Priority: required package (apt's protected/required set). Hold/auto
+         * are read directly. StateCache::Protect() is deliberately NOT used — the
+         * resolver sets it on requested targets, a different notion. */
         if (P->SelectedState == pkgCache::State::Hold) {
             h.flags.push_back("hold");
         }
@@ -118,7 +119,8 @@ int main(int argc, char **argv) {
             h.flags.push_back("essential");
         }
         pkgCache::VerIterator pver = !cur.end() ? cur : iv;
-        if (!pver.end() && pver->Priority == pkgCache::State::Required) {
+        bool required = !pver.end() && pver->Priority == pkgCache::State::Required;
+        if (required || (P->Flags & pkgCache::Flag::Important) != 0) {
             h.flags.push_back("protected");
         }
         for (auto &f : h.flags) {

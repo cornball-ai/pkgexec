@@ -54,6 +54,9 @@ static int fake_tx(void *ctx, const char *req, size_t reqlen, char **resp,
           "plan request carries the computed resource");
     CHECK(eff && seq(eff, "plan_hash", f->exp_hash),
           "plan request carries the computed digest");
+    /* exact schema: no extra top-level or effect keys */
+    CHECK(o && json_object_size(o) == 4, "plan request has exactly 4 top-level keys");
+    CHECK(eff && json_object_size(eff) == 4, "plan request effect has exactly 4 keys");
     json_decref(o);
     char *b = strdup(f->body);
     if (b == NULL) {
