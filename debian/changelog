@@ -1,3 +1,16 @@
+pkgexec (0.0.2) unstable; urgency=medium
+
+  * Activation: the nine per-verb pkexec/polkit entrypoints
+    (install/remove/purge/upgrade/dist-upgrade/update/hold/unhold/configure) redeem
+    a broker effect receipt over the authenticated transport and commit the apt
+    transaction behind the redeem gate, each linking only its own mechanism. The
+    committing verbs hand the dpkg locks to their spawned child (frontend/inner
+    split) and isolate the strict JSON result channel from commit output.
+  * Proven on a disposable systemd/polkit/dpkg VM (runix libapt-pkg-helper-plan.md
+    §7): 23/23 polkit matrix, 37/37 §7 acceptance gates, rc=0.
+
+ -- Troy Hernandez <troy@cornball.ai>  Fri, 14 Aug 2026 12:00:00 +0000
+
 pkgexec (0.0.1) unstable; urgency=medium
 
   * Slice 1 scaffold: schema-1 plan-digest encoder (OpenSSL EVP), strict stdin
