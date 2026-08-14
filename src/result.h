@@ -48,6 +48,20 @@ int pkgx_result_emit(int fd, pkgx_apt_status st, int effect_issued,
  * (fail closed: the caller must exit without emitting a result). */
 int pkgx_result_channel_open(void);
 
+/* The detail field's fixed capacity. Effectors write detail into a caller-owned
+ * buffer of this size with pkgx_detail_set — never a pointer borrowed from
+ * transient libapt storage (a resolved-transaction deque, a package name held in
+ * the cache) that is destroyed when the effector returns. A borrowed detail read
+ * back by the entrypoint after that return is a dangling read that corrupts the
+ * result JSON (observed as a garbled/unknown status); the copy keeps it valid.
+ * Sized to hold any package name or status tag; a longer string is truncated (the
+ * detail is diagnostic, the status is the decision). */
+#define PKGX_DETAIL_CAP 128
+
+/* Copy `s` (NULL treated as "") into `detail`, a caller buffer of PKGX_DETAIL_CAP
+ * bytes, truncating to fit and always NUL-terminating. A no-op if detail is NULL. */
+void pkgx_detail_set(char *detail, const char *s);
+
 #ifdef __cplusplus
 }
 #endif

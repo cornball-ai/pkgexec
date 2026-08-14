@@ -53,3 +53,16 @@ pkgx_apt_status pkgx_hold_classify(int committer_entered, int selection_applied,
      * never left broken; the prior selections stand. */
     return PKGX_APT_COMMIT_FAILED;
 }
+
+pkgx_commit_lock_outcome pkgx_commit_lock_handoff(int unlock_inner_ok,
+                                                  int dpkg_completed,
+                                                  int relock_inner_ok) {
+    pkgx_commit_lock_outcome o;
+    /* No hand-off means the child never ran: nothing issued, nothing committed. */
+    o.execution_began = unlock_inner_ok ? 1 : 0;
+    /* A clean commit needs dpkg to complete AND the inner lock re-taken; a re-lock
+     * failure is fail-closed (not OK) even when dpkg itself completed. */
+    o.committed_ok =
+        (unlock_inner_ok && dpkg_completed && relock_inner_ok) ? 1 : 0;
+    return o;
+}

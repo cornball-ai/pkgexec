@@ -15,6 +15,7 @@
 #include "digest.h"
 #include "effect.h"
 #include "plan.h"
+#include "result.h"
 #include "transport.h"
 
 #include <apt-pkg/cachefile.h>
@@ -83,12 +84,12 @@ extern "C" pkgx_apt_status pkgx_apt_update_effect(
     const char *resource_token, const char *effect_receipt, uid_t principal_uid,
     int plan_schema, const char *expected_cid, int lock_timeout_s,
     pkgx_transport *tx, char out_cid[PKGX_CID_LEN + 1], int *effect_issued,
-    const char **detail) {
-    *detail = "";
+    char *detail) {
+    pkgx_detail_set(detail, "");
     *effect_issued = 0; /* nothing issued until ListUpdate begins */
     const char *err = nullptr;
     if (!pkgx_apt_init(&err)) {
-        *detail = err;
+        pkgx_detail_set(detail, err);
         return PKGX_APT_INTERNAL;
     }
     pkgx_apt_set_lock_timeout(lock_timeout_s);
@@ -98,7 +99,7 @@ extern "C" pkgx_apt_status pkgx_apt_update_effect(
      * so a subset request cannot be honored faithfully — reject it before locking
      * (as targeted upgrades are rejected) until subset execution exists. */
     if (resource_token != nullptr && resource_token[0] != '\0') {
-        *detail = "subset_unsupported";
+        pkgx_detail_set(detail, "subset_unsupported");
         return PKGX_APT_RESOLVE_FAILED;
     }
 
@@ -111,14 +112,14 @@ extern "C" pkgx_apt_status pkgx_apt_update_effect(
     std::string lock_path = _config->FindDir("Dir::State::Lists") + "lock";
     int lfd = GetLock(lock_path, false);
     if (lfd < 0) {
-        *detail = "apt_locked";
+        pkgx_detail_set(detail, "apt_locked");
         return PKGX_APT_LOCKED;
     }
     close(lfd);
 
     pkgSourceList list;
     if (!list.ReadMainList()) {
-        *detail = "sources";
+        pkgx_detail_set(detail, "sources");
         return PKGX_APT_INTERNAL;
     }
 
@@ -217,9 +218,13 @@ extern "C" pkgx_apt_status pkgx_apt_update_effect(
         recs.push_back(r);
     }
 
+    /* update has no package policy, so the plan detail here is only a redeem code
+     * (stable), but snapshot uniformly into the caller buffer all the same. */
+    const char *pdetail = "";
     pkgx_plan_result pr = pkgx_plan_and_redeem_update(
         recs.data(), recs.size(), resource_token, effect_receipt, principal_uid,
-        plan_schema, expected_cid, pkgx_transport_tx, tx, out_cid, detail);
+        plan_schema, expected_cid, pkgx_transport_tx, tx, out_cid, &pdetail);
+    pkgx_detail_set(detail, pdetail);
 
     switch (pr) {
     case PKGX_PLAN_NO_OP:
@@ -250,13 +255,13 @@ extern "C" pkgx_apt_status pkgx_apt_update_effect(
         pkgx_update_classify(cc.entered, cc.refresh_ok ? 1 : 0, readable);
     switch (st) {
     case PKGX_APT_OK:
-        *detail = "ok";
+        pkgx_detail_set(detail, "ok");
         break;
     case PKGX_APT_COMMIT_FAILED:
-        *detail = cc.refresh_ok ? "indexes_unreadable" : "refresh";
+        pkgx_detail_set(detail, cc.refresh_ok ? "indexes_unreadable" : "refresh");
         break;
     default:
-        *detail = "internal";
+        pkgx_detail_set(detail, "internal");
         break;
     }
     return st;

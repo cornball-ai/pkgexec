@@ -6,9 +6,11 @@
  * the receipt is spent. The write is reached solely through pkgx_effect_gate.
  *
  * The effector holds the apt frontend lock (_system->Lock) continuously so no
- * other apt frontend interleaves; dpkg takes the database lock itself for the
- * brief write (the frontend/db split, as in A). A selection change runs no
- * maintainer scripts, so there is no broken-state check.
+ * other apt frontend interleaves; it releases the inner database lock for the
+ * brief write and gives the spawned dpkg DPKG_FRONTEND_LOCKED=true so dpkg skips
+ * the frontend lock and takes only that inner lock (the frontend/db split, as in
+ * A). A selection change runs no maintainer scripts, so there is no broken-state
+ * check.
  *
  * Ground truth is hold's own, not A's dpkg scan (plan §4C): the actual dpkg
  * selection, read back from a fresh cache after the write. VM-runtime; CI links
@@ -20,6 +22,7 @@
 #include "digest.h"
 #include "effect.h"
 #include "plan.h"
+#include "result.h"
 #include "spawn.h"
 #include "transport.h"
 
@@ -74,14 +77,20 @@ extern "C" int hold_commit(void *ctx, const char *correlation_id) {
     c->entered = true;
     /* Hand the inner dpkg database lock to the child: release it while keeping the
      * outer frontend lock held (so no other apt frontend interleaves), exactly as
-     * DoInstall does for A. Without this, the spawned dpkg blocks on the lock we
-     * still hold. If the hand-off fails, do not run dpkg (effect not issued). */
+     * DoInstall does for A. The spawned dpkg is additionally given
+     * DPKG_FRONTEND_LOCKED=true so it skips the frontend lock we still hold and
+     * takes only the inner lock we just released — given to the child only, never
+     * to this process's environment. If the hand-off fails, do not run dpkg (effect
+     * not issued). */
     if (!_system->UnLockInner()) {
         return -1;
     }
+    static const char *const frontend_locked[] = {"DPKG_FRONTEND_LOCKED=true",
+                                                  nullptr};
     const char *argv[] = {c->dpkg.c_str(), "--set-selections", nullptr};
     int started = 0;
-    c->applied = (pkgx_spawn_wait(argv, c->payload->c_str(), &started) == 0);
+    c->applied = (pkgx_spawn_wait_env(argv, c->payload->c_str(), frontend_locked,
+                                      &started) == 0);
     c->issued = (started != 0); /* effect_issued: dpkg ran, so state may have changed */
     /* Re-take the inner lock under the still-held outer lock; a failure leaves the
      * context inconsistent, so fail closed and let the caller reconcile. */
@@ -124,12 +133,12 @@ extern "C" pkgx_apt_status pkgx_apt_hold_effect(
     const char *verb, const char *const *targets, size_t ntargets,
     const char *effect_receipt, uid_t principal_uid, int plan_schema,
     const char *expected_cid, int lock_timeout_s, pkgx_transport *tx,
-    char out_cid[PKGX_CID_LEN + 1], int *effect_issued, const char **detail) {
-    *detail = "";
+    char out_cid[PKGX_CID_LEN + 1], int *effect_issued, char *detail) {
+    pkgx_detail_set(detail, "");
     *effect_issued = 0; /* nothing issued until the dpkg child is spawned */
     const char *err = nullptr;
     if (!pkgx_apt_init(&err)) {
-        *detail = err;
+        pkgx_detail_set(detail, err);
         return PKGX_APT_INTERNAL;
     }
     pkgx_apt_set_lock_timeout(lock_timeout_s);
@@ -140,17 +149,17 @@ extern "C" pkgx_apt_status pkgx_apt_hold_effect(
     /* Frontend lock first (contention is retryable); then read the cache without
      * re-locking, so a failure there is a cache fault, not a lock timeout. */
     if (!_system->Lock()) {
-        *detail = "apt_locked";
+        pkgx_detail_set(detail, "apt_locked");
         return PKGX_APT_LOCKED;
     }
     pkgCacheFile cache;
     if (!cache.Open(nullptr, false)) {
-        *detail = "cache";
+        pkgx_detail_set(detail, "cache");
         return PKGX_APT_INTERNAL;
     }
     pkgCache *c = cache.GetPkgCache();
     if (c == nullptr) {
-        *detail = "cache";
+        pkgx_detail_set(detail, "cache");
         return PKGX_APT_INTERNAL;
     }
 
@@ -161,7 +170,7 @@ extern "C" pkgx_apt_status pkgx_apt_hold_effect(
     for (size_t i = 0; i < ntargets; i++) {
         pkgCache::PkgIterator P = c->FindPkg(targets[i]);
         if (P.end()) {
-            *detail = targets[i];
+            pkgx_detail_set(detail, targets[i]);
             return PKGX_APT_RESOLVE_FAILED;
         }
         const char *from_state = selection_word(P->SelectedState);
@@ -171,7 +180,7 @@ extern "C" pkgx_apt_status pkgx_apt_hold_effect(
          * {hold, install} and fail there. */
         if (std::strcmp(from_state, "install") != 0 &&
             std::strcmp(from_state, "hold") != 0) {
-            *detail = targets[i];
+            pkgx_detail_set(detail, targets[i]);
             return PKGX_APT_RESOLVE_FAILED;
         }
         if (std::strcmp(from_state, to_state) == 0) {
@@ -201,10 +210,14 @@ extern "C" pkgx_apt_status pkgx_apt_hold_effect(
         payload += '\n';
     }
 
+    /* The offending package (ownership refusal) borrows the `changes` deque, so
+     * snapshot the plan detail into the caller buffer while that deque is alive. */
+    const char *pdetail = "";
     pkgx_plan_result pr = pkgx_plan_and_redeem_hold(
         verb, holds.data(), holds.size(), targets, ntargets, effect_receipt,
         principal_uid, plan_schema, expected_cid, pkgx_transport_tx, tx, out_cid,
-        detail);
+        &pdetail);
+    pkgx_detail_set(detail, pdetail);
 
     switch (pr) {
     case PKGX_PLAN_NO_OP:
@@ -237,13 +250,13 @@ extern "C" pkgx_apt_status pkgx_apt_hold_effect(
         pkgx_hold_classify(cc.entered, cc.applied ? 1 : 0, matched);
     switch (st) {
     case PKGX_APT_OK:
-        *detail = "ok";
+        pkgx_detail_set(detail, "ok");
         break;
     case PKGX_APT_COMMIT_FAILED:
-        *detail = cc.applied ? "selection_mismatch" : "set_selections";
+        pkgx_detail_set(detail, cc.applied ? "selection_mismatch" : "set_selections");
         break;
     default:
-        *detail = "internal";
+        pkgx_detail_set(detail, "internal");
         break;
     }
     return st;

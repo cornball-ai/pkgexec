@@ -16,6 +16,7 @@
 #include "digest.h"
 #include "effect.h"
 #include "plan.h"
+#include "result.h"
 #include "transport.h"
 
 #include <apt-pkg/acquire.h>
@@ -91,9 +92,28 @@ extern "C" int txn_commit(void *ctx, const char *correlation_id) {
 
     std::unique_ptr<APT::Progress::PackageManager> progress(
         APT::Progress::PackageManagerProgressFactory());
-    c->execution_began = true; /* from here the host may be mutated */
-    pkgPackageManager::OrderResult res = pm->DoInstall(progress.get());
-    c->committed_ok = (res == pkgPackageManager::Completed);
+
+    /* Hand the inner dpkg database lock to the child DoInstall spawns: release it
+     * under the still-held outer frontend lock (UnLockInner), run dpkg, then re-take
+     * it (LockInner) — mirroring apt-get's own InstallPackages (Ubuntu apt 2.8.3).
+     * Without releasing the inner lock, the spawned dpkg blocks on the database lock
+     * this process still holds. libapt hands its dpkg child DPKG_FRONTEND_LOCKED
+     * itself, so the child skips the frontend lock we keep. If the hand-off never
+     * happens, dpkg is not run (nothing issued); a failed re-lock is fail-closed but
+     * leaves effect_issued honest — dpkg already ran. The outcome of every path is
+     * decided by the pure pkgx_commit_lock_handoff (apt_status.h). */
+    int unlock_ok = _system->UnLockInner() ? 1 : 0;
+    int completed = 0, relock_ok = 0;
+    if (unlock_ok) {
+        c->execution_began = true; /* from here the host may be mutated */
+        pkgPackageManager::OrderResult res = pm->DoInstall(progress.get());
+        completed = (res == pkgPackageManager::Completed) ? 1 : 0;
+        relock_ok = _system->LockInner() ? 1 : 0;
+    }
+    pkgx_commit_lock_outcome o =
+        pkgx_commit_lock_handoff(unlock_ok, completed, relock_ok);
+    c->execution_began = (o.execution_began != 0);
+    c->committed_ok = (o.committed_ok != 0);
     return c->committed_ok ? 0 : -1;
 }
 
@@ -108,12 +128,12 @@ extern "C" pkgx_apt_status pkgx_apt_txn_effect(
     const char *verb, const char *const *targets, size_t ntargets,
     const char *effect_receipt, uid_t principal_uid, int plan_schema,
     const char *expected_cid, int lock_timeout_s, pkgx_transport *tx,
-    char out_cid[PKGX_CID_LEN + 1], int *effect_issued, const char **detail) {
-    *detail = "";
+    char out_cid[PKGX_CID_LEN + 1], int *effect_issued, char *detail) {
+    pkgx_detail_set(detail, "");
     *effect_issued = 0; /* nothing issued until DoInstall is reached */
     const char *err = nullptr;
     if (!pkgx_apt_init(&err)) {
-        *detail = err;
+        pkgx_detail_set(detail, err);
         return PKGX_APT_INTERNAL;
     }
     pkgx_apt_set_lock_timeout(lock_timeout_s);
@@ -127,7 +147,7 @@ extern "C" pkgx_apt_status pkgx_apt_txn_effect(
     /* v1: upgrade/dist-upgrade are whole-system; the parser rejects targets for
      * them, and this guards the effector directly (belt and suspenders). */
     if ((upgrade || dist) && ntargets != 0) {
-        *detail = "targets_unsupported";
+        pkgx_detail_set(detail, "targets_unsupported");
         return PKGX_APT_RESOLVE_FAILED;
     }
 
@@ -135,18 +155,18 @@ extern "C" pkgx_apt_status pkgx_apt_txn_effect(
      * genuine contention. Then build the cache WITHOUT re-locking, so a failure
      * there is a cache/configuration fault, not a lock timeout. */
     if (!_system->Lock()) {
-        *detail = "apt_locked";
+        pkgx_detail_set(detail, "apt_locked");
         return PKGX_APT_LOCKED;
     }
     pkgCacheFile cache;
     if (!cache.Open(nullptr, false)) {
-        *detail = "cache";
+        pkgx_detail_set(detail, "cache");
         return PKGX_APT_INTERNAL;
     }
     pkgCache *c = cache.GetPkgCache();
     pkgDepCache *dc = cache.GetDepCache();
     if (c == nullptr || dc == nullptr) {
-        *detail = "cache";
+        pkgx_detail_set(detail, "cache");
         return PKGX_APT_INTERNAL;
     }
 
@@ -154,7 +174,7 @@ extern "C" pkgx_apt_status pkgx_apt_txn_effect(
         const int mode =
             dist ? APT::Upgrade::ALLOW_EVERYTHING : APT::Upgrade::FORBID_REMOVE_PACKAGES;
         if (!APT::Upgrade::Upgrade(*dc, mode)) {
-            *detail = "resolve";
+            pkgx_detail_set(detail, "resolve");
             return PKGX_APT_RESOLVE_FAILED;
         }
     } else {
@@ -162,7 +182,7 @@ extern "C" pkgx_apt_status pkgx_apt_txn_effect(
         for (size_t i = 0; i < ntargets; i++) {
             pkgCache::PkgIterator P = c->FindPkg(targets[i]);
             if (P.end()) {
-                *detail = targets[i]; /* unknown package */
+                pkgx_detail_set(detail, targets[i]); /* unknown package */
                 return PKGX_APT_RESOLVE_FAILED;
             }
             resolver.Protect(P);
@@ -174,7 +194,7 @@ extern "C" pkgx_apt_status pkgx_apt_txn_effect(
             }
         }
         if (!resolver.Resolve(true)) {
-            *detail = "resolve";
+            pkgx_detail_set(detail, "resolve");
             return PKGX_APT_RESOLVE_FAILED;
         }
     }
@@ -185,11 +205,15 @@ extern "C" pkgx_apt_status pkgx_apt_txn_effect(
     std::vector<pkgx_txn_record> recs;
     pkgx_apt_map_txn(c, dc, holders, recs);
 
-    /* Policy, resource, digest, redeem — over the resolved records. */
+    /* Policy, resource, digest, redeem — over the resolved records. The offending
+     * package (policy refusal) borrows the `holders` deque, so snapshot the detail
+     * into the caller buffer here, while that deque is still alive. */
+    const char *pdetail = "";
     pkgx_plan_result pr = pkgx_plan_and_redeem(
         verb, recs.data(), recs.size(), targets, ntargets, effect_receipt,
         principal_uid, plan_schema, expected_cid, pkgx_transport_tx, tx, out_cid,
-        detail);
+        &pdetail);
+    pkgx_detail_set(detail, pdetail);
 
     switch (pr) {
     case PKGX_PLAN_NO_OP:
@@ -224,19 +248,19 @@ extern "C" pkgx_apt_status pkgx_apt_txn_effect(
                                            cc.committed_ok, broken);
     switch (st) {
     case PKGX_APT_OK:
-        *detail = "ok";
+        pkgx_detail_set(detail, "ok");
         break;
     case PKGX_APT_NOT_APPLIED:
-        *detail = cc.fetched ? "commit_setup" : "fetch";
+        pkgx_detail_set(detail, cc.fetched ? "commit_setup" : "fetch");
         break;
     case PKGX_APT_BROKEN:
-        *detail = "broken";
+        pkgx_detail_set(detail, "broken");
         break;
     case PKGX_APT_COMMIT_FAILED:
-        *detail = "commit";
+        pkgx_detail_set(detail, "commit");
         break;
     default:
-        *detail = "internal";
+        pkgx_detail_set(detail, "internal");
         break;
     }
     return st;

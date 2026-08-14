@@ -8,6 +8,7 @@
 
 #include <jansson.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -245,6 +246,51 @@ int main(void) {
         }
         CHECK(strstr(errbuf, "Unpacking") != NULL,
               "isolate: commit garbage was diverted to stderr");
+    }
+
+    /* --- detail survives the transient storage it was copied from (the G9/G-OWN
+     * fix). A policy offender borrows the resolved-transaction deque, which is
+     * destroyed before the entrypoint serializes the result; the effector must COPY
+     * it into the caller buffer with pkgx_detail_set, not store the borrowed
+     * pointer. Here a heap string stands in for that deque-owned name and is freed
+     * before serialization — ASan flags a use-after-free if the copy did not
+     * happen, and the value check confirms the copy is complete. --- */
+    {
+        char detail[PKGX_DETAIL_CAP];
+        char *transient = strdup("r-cornball-canary");
+        CHECK(transient != NULL, "detail-survives: allocate transient offender");
+        if (transient != NULL) {
+            pkgx_detail_set(detail, transient);
+            free(transient); /* the deque dies before the entrypoint emits */
+        }
+        json_t *o3 = roundtrip(PKGX_APT_NOT_OWNED, 0, "", detail);
+        CHECK(o3 != NULL, "detail-survives: encodes after the source is freed");
+        if (o3 != NULL) {
+            CHECK(is_str_eq(o3, "detail", "r-cornball-canary"),
+                  "detail-survives: offender name intact, valid JSON");
+            CHECK(is_str_eq(o3, "status", "package_not_owned"),
+                  "detail-survives: status carried");
+            json_decref(o3);
+        }
+    }
+
+    /* --- pkgx_detail_set is bounded: an over-long source truncates to cap-1 and
+     * stays NUL-terminated (so it still serializes), and NULL becomes "". --- */
+    {
+        char detail[PKGX_DETAIL_CAP];
+        char big[PKGX_DETAIL_CAP + 50];
+        memset(big, 'a', sizeof big - 1);
+        big[sizeof big - 1] = '\0';
+        pkgx_detail_set(detail, big);
+        CHECK(strlen(detail) == PKGX_DETAIL_CAP - 1,
+              "detail_set: over-long source truncated to cap-1");
+        json_t *o4 = roundtrip(PKGX_APT_INTERNAL, 0, "", detail);
+        CHECK(o4 != NULL, "detail_set: truncated detail still serializes");
+        if (o4 != NULL) {
+            json_decref(o4);
+        }
+        pkgx_detail_set(detail, NULL);
+        CHECK(detail[0] == '\0', "detail_set: NULL source -> empty string");
     }
 
     printf("%d checks, %d failures\n", checks, failures);

@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
     tx.timeout_ms = PKGX_TRANSPORT_TIMEOUT_MS;
 
     char out_cid[PKGX_CID_LEN + 1] = {0};
-    const char *detail = "";
+    char detail[PKGX_DETAIL_CAP] = "";
     int issued = 0;
     pkgx_apt_status st;
     if (strcmp(verb, "apt.update") == 0) {
@@ -100,22 +100,22 @@ int main(int argc, char **argv) {
         st = pkgx_apt_update_effect("", req.effect_receipt, uid,
                                     (int) req.plan_schema, req.correlation_id,
                                     (int) req.lock_timeout, &tx, out_cid, &issued,
-                                    &detail);
+                                    detail);
     } else if (strcmp(verb, "apt.hold") == 0 || strcmp(verb, "apt.unhold") == 0) {
         st = pkgx_apt_hold_effect(
             verb, (const char *const *) req.packages, req.npackages,
             req.effect_receipt, uid, (int) req.plan_schema, req.correlation_id,
-            (int) req.lock_timeout, &tx, out_cid, &issued, &detail);
+            (int) req.lock_timeout, &tx, out_cid, &issued, detail);
     } else if (strcmp(verb, "apt.configure") == 0) {
         st = pkgx_apt_configure_effect(req.effect_receipt, uid,
                                        (int) req.plan_schema, req.correlation_id,
                                        (int) req.lock_timeout, &tx, out_cid,
-                                       &issued, &detail);
+                                       &issued, detail);
     } else {
         st = pkgx_apt_txn_effect(
             verb, (const char *const *) req.packages, req.npackages,
             req.effect_receipt, uid, (int) req.plan_schema, req.correlation_id,
-            (int) req.lock_timeout, &tx, out_cid, &issued, &detail);
+            (int) req.lock_timeout, &tx, out_cid, &issued, detail);
     }
 
     /* The result channel: exactly the strict JSON a stage-3 entrypoint emits,

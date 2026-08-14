@@ -66,6 +66,29 @@ pkgx_apt_status pkgx_update_classify(int committer_entered, int refresh_ok,
 pkgx_apt_status pkgx_hold_classify(int committer_entered, int selection_applied,
                                    int selection_matches);
 
+/* The inner-lock hand-off outcome for a dpkg-running transaction commit (A). The
+ * effector hands the inner dpkg database lock to the child that DoInstall spawns by
+ * releasing it under the still-held outer frontend lock (UnLockInner), running
+ * DoInstall, then re-taking it (LockInner) — mirroring apt-get's own InstallPackages
+ * (Ubuntu apt 2.8.3). libapt gives its dpkg child DPKG_FRONTEND_LOCKED itself, so
+ * the child skips the frontend lock and takes only the inner lock the effector just
+ * released. Split out pure so every path is unit-tested without libapt or root:
+ *   unlock_inner_ok — UnLockInner() released the inner lock (else dpkg never runs);
+ *   dpkg_completed  — DoInstall returned Completed;
+ *   relock_inner_ok — LockInner() re-took the inner lock afterward.
+ * execution_began is 1 iff the hand-off happened (dpkg ran) — the effect_issued
+ * truth, honest even when the re-lock later fails. committed_ok is 1 only when dpkg
+ * completed AND the inner lock was re-taken; a re-lock failure is fail-closed (the
+ * commit is not OK) yet leaves execution_began — and thus effect_issued — true. */
+typedef struct {
+    int execution_began;
+    int committed_ok;
+} pkgx_commit_lock_outcome;
+
+pkgx_commit_lock_outcome pkgx_commit_lock_handoff(int unlock_inner_ok,
+                                                  int dpkg_completed,
+                                                  int relock_inner_ok);
+
 #ifdef __cplusplus
 }
 #endif

@@ -74,6 +74,36 @@ int main(void) {
         free(big);
     }
 
+    /* --- child-only extra environment: the hold/configure committers give the
+     * spawned dpkg DPKG_FRONTEND_LOCKED=true so it skips the frontend lock the
+     * effector holds, WITHOUT leaking that flag into this process's environment.
+     * Establish a clean baseline first so the no-leak assertion is robust. --- */
+    unsetenv("DPKG_FRONTEND_LOCKED");
+
+    const char *env_locked[] = {"DPKG_FRONTEND_LOCKED=true", NULL};
+    /* /bin/sh is argv[0] (absolute); the child exits 0 iff it sees the flag set. */
+    const char *see_it[] = {"/bin/sh", "-c",
+                            "test \"$DPKG_FRONTEND_LOCKED\" = true", NULL};
+    started = -1;
+    CHECK(pkgx_spawn_wait_env(see_it, NULL, env_locked, &started) == 0,
+          "spawn_wait_env: child sees DPKG_FRONTEND_LOCKED=true");
+    CHECK(started == 1, "spawn_wait_env: frontend-locked child started");
+
+    /* No ambient leak: the flag was given to the child only, so this process's
+     * environment is untouched. */
+    CHECK(getenv("DPKG_FRONTEND_LOCKED") == NULL,
+          "spawn_wait_env: parent environment not polluted (child-only)");
+
+    /* A child spawned WITHOUT the extra env must NOT see the flag — both through the
+     * plain pkgx_spawn_wait and through pkgx_spawn_wait_env with a NULL extra list. */
+    const char *unset[] = {"/bin/sh", "-c", "test -z \"$DPKG_FRONTEND_LOCKED\"", NULL};
+    started = -1;
+    CHECK(pkgx_spawn_wait(unset, NULL, &started) == 0,
+          "plain spawn: child does NOT see DPKG_FRONTEND_LOCKED");
+    started = -1;
+    CHECK(pkgx_spawn_wait_env(unset, NULL, NULL, &started) == 0,
+          "spawn_wait_env NULL extra: child does NOT see DPKG_FRONTEND_LOCKED");
+
     printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

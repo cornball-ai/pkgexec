@@ -96,27 +96,27 @@ int main(void) {
 
     char out_cid[PKGX_CID_LEN + 1] = {0};
     int issued = 0;
-    const char *detail = "";
+    char detail[PKGX_DETAIL_CAP] = "";
     pkgx_apt_status st;
 #if defined(PKGX_FAMILY_TXN)
     st = pkgx_apt_txn_effect(verb, (const char *const *) req.packages,
                              req.npackages, req.effect_receipt, uid,
                              (int) req.plan_schema, req.correlation_id,
-                             (int) req.lock_timeout, &tx, out_cid, &issued, &detail);
+                             (int) req.lock_timeout, &tx, out_cid, &issued, detail);
 #elif defined(PKGX_FAMILY_UPDATE)
     /* v1 update is whole-source-list only; the request carries no subset. */
     st = pkgx_apt_update_effect("", req.effect_receipt, uid, (int) req.plan_schema,
                                 req.correlation_id, (int) req.lock_timeout, &tx,
-                                out_cid, &issued, &detail);
+                                out_cid, &issued, detail);
 #elif defined(PKGX_FAMILY_HOLD)
     st = pkgx_apt_hold_effect(verb, (const char *const *) req.packages,
                               req.npackages, req.effect_receipt, uid,
                               (int) req.plan_schema, req.correlation_id,
-                              (int) req.lock_timeout, &tx, out_cid, &issued, &detail);
+                              (int) req.lock_timeout, &tx, out_cid, &issued, detail);
 #elif defined(PKGX_FAMILY_CONFIGURE)
     st = pkgx_apt_configure_effect(req.effect_receipt, uid, (int) req.plan_schema,
                                    req.correlation_id, (int) req.lock_timeout, &tx,
-                                   out_cid, &issued, &detail);
+                                   out_cid, &issued, detail);
 #else
 #error "define exactly one PKGX_FAMILY_{TXN,UPDATE,HOLD,CONFIGURE}"
 #endif

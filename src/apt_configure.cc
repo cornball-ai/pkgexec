@@ -22,6 +22,7 @@
 #include "digest.h"
 #include "effect.h"
 #include "plan.h"
+#include "result.h"
 #include "spawn.h"
 #include "transport.h"
 
@@ -75,14 +76,18 @@ extern "C" int configure_commit(void *ctx, const char *correlation_id) {
     c->entered = true;
     /* Hand the inner dpkg database lock to the child (release it, keep the outer
      * frontend lock held), as DoInstall does for A; otherwise the spawned dpkg
-     * blocks on the lock we still hold. If the hand-off fails, do not run dpkg
-     * (effect not issued). */
+     * blocks on the lock we still hold. The child is additionally given
+     * DPKG_FRONTEND_LOCKED=true so it skips the frontend lock we keep and takes only
+     * the inner lock we released — child-only, never in this process's environment.
+     * If the hand-off fails, do not run dpkg (effect not issued). */
     if (!_system->UnLockInner()) {
         return -1;
     }
+    static const char *const frontend_locked[] = {"DPKG_FRONTEND_LOCKED=true",
+                                                  nullptr};
     const char *argv[] = {c->dpkg.c_str(), "--configure", "--pending", nullptr};
     int started = 0;
-    c->ran_ok = (pkgx_spawn_wait(argv, nullptr, &started) == 0);
+    c->ran_ok = (pkgx_spawn_wait_env(argv, nullptr, frontend_locked, &started) == 0);
     c->issued = (started != 0); /* effect_issued: dpkg ran, so state may have changed */
     /* Re-take the inner lock under the still-held outer lock; a failure leaves the
      * context inconsistent, so fail closed and let the caller reconcile. */
@@ -97,13 +102,13 @@ extern "C" int configure_commit(void *ctx, const char *correlation_id) {
 extern "C" pkgx_apt_status pkgx_apt_configure_effect(
     const char *effect_receipt, uid_t principal_uid, int plan_schema,
     const char *expected_cid, int lock_timeout_s, pkgx_transport *tx,
-    char out_cid[PKGX_CID_LEN + 1], int *effect_issued, const char **detail) {
-    *detail = "";
+    char out_cid[PKGX_CID_LEN + 1], int *effect_issued, char *detail) {
+    pkgx_detail_set(detail, "");
     *effect_issued = 0; /* stays 0 through the half-installed refusal and any
                          * pre-spawn failure; set only once dpkg is spawned */
     const char *err = nullptr;
     if (!pkgx_apt_init(&err)) {
-        *detail = err;
+        pkgx_detail_set(detail, err);
         return PKGX_APT_INTERNAL;
     }
     pkgx_apt_set_lock_timeout(lock_timeout_s);
@@ -111,17 +116,17 @@ extern "C" pkgx_apt_status pkgx_apt_configure_effect(
     /* Frontend lock first (contention is retryable); then read the cache without
      * re-locking, so a failure there is a cache fault, not a lock timeout. */
     if (!_system->Lock()) {
-        *detail = "apt_locked";
+        pkgx_detail_set(detail, "apt_locked");
         return PKGX_APT_LOCKED;
     }
     pkgCacheFile cache;
     if (!cache.Open(nullptr, false)) {
-        *detail = "cache";
+        pkgx_detail_set(detail, "cache");
         return PKGX_APT_INTERNAL;
     }
     pkgCache *c = cache.GetPkgCache();
     if (c == nullptr) {
-        *detail = "cache";
+        pkgx_detail_set(detail, "cache");
         return PKGX_APT_INTERNAL;
     }
 
@@ -129,11 +134,12 @@ extern "C" pkgx_apt_status pkgx_apt_configure_effect(
      * half-installed package (interrupted unpack) is unrepairable by configure:
      * the system is already broken in a way this verb will not fix, so refuse
      * with BROKEN before the receipt is spent — the caller must resolve the
-     * half-installed package first. */
+     * half-installed package first. Copy the name into the caller buffer (it
+     * borrows the cache, destroyed on return). */
     std::deque<CfgHolder> holders;
     for (pkgCache::PkgIterator P = c->PkgBegin(); !P.end(); ++P) {
         if (P->CurrentState == pkgCache::State::HalfInstalled) {
-            *detail = P.Name();
+            pkgx_detail_set(detail, P.Name());
             return PKGX_APT_BROKEN;
         }
         const char *state = pending_state(P->CurrentState);
@@ -159,9 +165,13 @@ extern "C" pkgx_apt_status pkgx_apt_configure_effect(
         cfgs.push_back(r);
     }
 
+    /* The offending package (ownership refusal) borrows the `holders` deque, so
+     * snapshot the plan detail into the caller buffer while that deque is alive. */
+    const char *pdetail = "";
     pkgx_plan_result pr = pkgx_plan_and_redeem_configure(
         cfgs.data(), cfgs.size(), effect_receipt, principal_uid, plan_schema,
-        expected_cid, pkgx_transport_tx, tx, out_cid, detail);
+        expected_cid, pkgx_transport_tx, tx, out_cid, &pdetail);
+    pkgx_detail_set(detail, pdetail);
 
     switch (pr) {
     case PKGX_PLAN_NO_OP:
@@ -198,16 +208,16 @@ extern "C" pkgx_apt_status pkgx_apt_configure_effect(
                                            cc.ran_ok ? 1 : 0, broken);
     switch (st) {
     case PKGX_APT_OK:
-        *detail = "ok";
+        pkgx_detail_set(detail, "ok");
         break;
     case PKGX_APT_BROKEN:
-        *detail = "broken";
+        pkgx_detail_set(detail, "broken");
         break;
     case PKGX_APT_COMMIT_FAILED:
-        *detail = "configure";
+        pkgx_detail_set(detail, "configure");
         break;
     default:
-        *detail = "internal";
+        pkgx_detail_set(detail, "internal");
         break;
     }
     return st;

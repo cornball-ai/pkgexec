@@ -87,6 +87,38 @@ int main(void) {
     CHECK(pkgx_hold_classify(1, 0, 0) == PKGX_APT_COMMIT_FAILED,
           "hold: failed and mismatched -> COMMIT_FAILED");
 
+    /* --- transaction inner-lock hand-off (A): unlock_inner_ok, dpkg_completed,
+     * relock_inner_ok. execution_began (the effect_issued truth) iff the inner lock
+     * was handed off; committed_ok iff dpkg completed AND the lock was re-taken. --- */
+
+    /* the hand-off never happened: dpkg never ran, so nothing issued, nothing
+     * committed — and a stale completed/relock flag must not be trusted. */
+    pkgx_commit_lock_outcome o = pkgx_commit_lock_handoff(0, 0, 0);
+    CHECK(o.execution_began == 0 && o.committed_ok == 0,
+          "handoff: no unlock -> not begun, not committed");
+    o = pkgx_commit_lock_handoff(0, 1, 1);
+    CHECK(o.execution_began == 0 && o.committed_ok == 0,
+          "handoff: no unlock, stale completed/relock flags ignored");
+
+    /* released, dpkg completed, re-took the inner lock: the clean commit. */
+    o = pkgx_commit_lock_handoff(1, 1, 1);
+    CHECK(o.execution_began == 1 && o.committed_ok == 1,
+          "handoff: unlock + completed + relock -> begun + committed");
+
+    /* released, dpkg completed, but the re-lock FAILED: fail-closed (not committed)
+     * yet effect_issued stays honest — dpkg already ran. */
+    o = pkgx_commit_lock_handoff(1, 1, 0);
+    CHECK(o.execution_began == 1 && o.committed_ok == 0,
+          "handoff: relock failure -> fail-closed, effect_issued still honest");
+
+    /* released, dpkg FAILED: began (effect issued), not committed. */
+    o = pkgx_commit_lock_handoff(1, 0, 1);
+    CHECK(o.execution_began == 1 && o.committed_ok == 0,
+          "handoff: dpkg failed -> begun but not committed");
+    o = pkgx_commit_lock_handoff(1, 0, 0);
+    CHECK(o.execution_began == 1 && o.committed_ok == 0,
+          "handoff: dpkg failed and relock failed -> begun, not committed");
+
     printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

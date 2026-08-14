@@ -140,3 +140,18 @@ int pkgx_result_channel_open(void) {
     }
     return rfd;
 }
+
+void pkgx_detail_set(char *detail, const char *s) {
+    if (detail == NULL) {
+        return;
+    }
+    if (s == NULL) {
+        s = "";
+    }
+    size_t n = strlen(s);
+    if (n > PKGX_DETAIL_CAP - 1) {
+        n = PKGX_DETAIL_CAP - 1; /* truncate: the detail is diagnostic, not decisive */
+    }
+    memcpy(detail, s, n);
+    detail[n] = '\0';
+}

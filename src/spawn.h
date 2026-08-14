@@ -24,6 +24,16 @@ extern "C" {
  * the host may have been mutated iff the child started. */
 int pkgx_spawn_wait(const char *const argv[], const char *input, int *started);
 
+/* As pkgx_spawn_wait, but the child additionally receives each "KEY=VALUE" entry of
+ * `extra_env` (a NULL-terminated array, or NULL for none) in its environment — and
+ * ONLY the child: the calling process's environment is never modified. The hold and
+ * configure committers use it to give the spawned dpkg DPKG_FRONTEND_LOCKED=true
+ * (the effector holds the outer frontend lock, so dpkg must skip it and take only
+ * the inner lock the effector released) without leaking that flag into the ambient
+ * environment. Entries precede the inherited environment, so they take precedence. */
+int pkgx_spawn_wait_env(const char *const argv[], const char *input,
+                        const char *const extra_env[], int *started);
+
 #ifdef __cplusplus
 }
 #endif
