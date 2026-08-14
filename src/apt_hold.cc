@@ -39,29 +39,6 @@
 
 namespace {
 
-/* The dpkg selection word for a target's current selection — the same tokens
- * `dpkg --set-selections` reads and writes. */
-const char *selection_word(unsigned char sel) {
-    switch (sel) {
-    case pkgCache::State::Install:
-        return "install";
-    case pkgCache::State::Hold:
-        return "hold";
-    case pkgCache::State::DeInstall:
-        return "deinstall";
-    case pkgCache::State::Purge:
-        return "purge";
-    default:
-        return "unknown";
-    }
-}
-
-/* Stable storage for the changing hold records; the C records borrow these. */
-struct HoldHolder {
-    std::string package, from, to;
-    bool want_hold; /* the intended post-write selection, for the read-back */
-};
-
 struct HoldCommitCtx {
     const std::string *payload; /* "<pkg> <selection>\n" lines for set-selections */
     std::string dpkg;           /* apt-configured dpkg path (kept alive for argv) */
@@ -104,7 +81,7 @@ extern "C" int hold_commit(void *ctx, const char *correlation_id) {
  * every changed target now sits in its intended selection (held vs not-held).
  * Isolated from the write's error stack; an unreadable cache fails the match
  * (fail-safe). */
-bool selections_match(const std::deque<HoldHolder> &changes) {
+bool selections_match(const std::deque<PkgxHoldHolder> &changes) {
     _error->PushToStack();
     bool ok = false;
     pkgCacheFile fresh;
@@ -112,7 +89,7 @@ bool selections_match(const std::deque<HoldHolder> &changes) {
         pkgCache *pc = fresh.GetPkgCache();
         if (pc != nullptr) {
             ok = true;
-            for (const HoldHolder &h : changes) {
+            for (const PkgxHoldHolder &h : changes) {
                 pkgCache::PkgIterator P = pc->FindPkg(h.package);
                 bool is_hold =
                     !P.end() && P->SelectedState == pkgCache::State::Hold;
@@ -144,7 +121,6 @@ extern "C" pkgx_apt_status pkgx_apt_hold_effect(
     pkgx_apt_set_lock_timeout(lock_timeout_s);
 
     const bool hold = (std::strcmp(verb, "apt.hold") == 0);
-    const char *to_state = hold ? "hold" : "install";
 
     /* Frontend lock first (contention is retryable); then read the cache without
      * re-locking, so a failure there is a cache fault, not a lock timeout. */
@@ -163,47 +139,23 @@ extern "C" pkgx_apt_status pkgx_apt_hold_effect(
         return PKGX_APT_INTERNAL;
     }
 
-    /* Read the current selection for each target; keep only the ones that
-     * actually change (an already-held hold, or an already-unheld unhold, is a
-     * no-op that must not spend the receipt). Unknown target → resolve failure. */
-    std::deque<HoldHolder> changes;
-    for (size_t i = 0; i < ntargets; i++) {
-        pkgCache::PkgIterator P = c->FindPkg(targets[i]);
-        if (P.end()) {
-            pkgx_detail_set(detail, targets[i]);
-            return PKGX_APT_RESOLVE_FAILED;
-        }
-        const char *from_state = selection_word(P->SelectedState);
-        /* hold/unhold toggles between install and hold; a target selected for
-         * deinstall/purge (or unknown) is not a valid hold subject. Refuse it
-         * explicitly rather than letting it reach a digest whose state grammar is
-         * {hold, install} and fail there. */
-        if (std::strcmp(from_state, "install") != 0 &&
-            std::strcmp(from_state, "hold") != 0) {
-            pkgx_detail_set(detail, targets[i]);
-            return PKGX_APT_RESOLVE_FAILED;
-        }
-        if (std::strcmp(from_state, to_state) == 0) {
-            continue; /* no change for this target */
-        }
-        HoldHolder h;
-        h.package = targets[i];
-        h.from = from_state;
-        h.to = to_state;
-        h.want_hold = hold;
-        changes.push_back(std::move(h));
+    /* Read + filter the changing selections via the shared builder (the same one the
+     * read-only planner uses), so preview and commit derive an identical digest. An
+     * unknown or non-hold-subject target is a resolve failure; empty changes reach the
+     * plan step as NO_OP (unspent). */
+    std::deque<PkgxHoldHolder> changes;
+    std::vector<pkgx_hold_record> holds;
+    const char *offender = nullptr;
+    if (pkgx_apt_map_hold(c, targets, ntargets, hold, changes, holds, &offender) !=
+        PKGX_HOLD_MAP_OK) {
+        pkgx_detail_set(detail, offender);
+        return PKGX_APT_RESOLVE_FAILED;
     }
 
-    /* Build the borrowed hold records + the set-selections payload from the same
-     * settled changes. Empty changes → the plan step returns NO_OP (unspent). */
-    std::vector<pkgx_hold_record> holds;
+    /* The shared builder produced the borrowed hold records; build the set-selections
+     * payload from the same changes. */
     std::string payload;
     for (auto &h : changes) {
-        pkgx_hold_record r;
-        r.package = h.package.c_str();
-        r.from_state = h.from.c_str();
-        r.to_state = h.to.c_str();
-        holds.push_back(r);
         payload += h.package;
         payload += ' ';
         payload += h.to; /* "hold" or "install": valid dpkg selection words */

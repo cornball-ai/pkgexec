@@ -9,10 +9,11 @@
  *
  * It is an ORACLE, not a policy authority: successful receipt redemption is what
  * proves this preview matched the effector's atomic resolve. To keep it honest it
- * REUSES the effector code where a shared entry exists (pkgx_apt_map_txn for the
- * transaction records, the shared pkgx_digest_* and policy functions) and MIRRORS
- * remaining effector's enumeration (update/hold/configure) field-for-field. The
- * digest sorts records bytewise, so only the record SET must match, not the order.
+ * builds every descriptor through the SAME shared apt_common builders the effectors
+ * use (pkgx_apt_map_txn / _sources / _hold / _configure) plus the shared
+ * pkgx_digest_* and policy functions — no mirrored enumeration, so a matching cache
+ * yields a matching hash by construction. The digest sorts records bytewise, so only
+ * the record SET must match, not the order.
  *
  * Contracts it enforces so it never hands the driver a plan the effector would
  * refuse or no-op:
@@ -35,7 +36,7 @@
  * Output is machine-readable `key=value` lines; the driver reads `resource=` and
  * `plan_hash=` (present only on exit 0).
  */
-#include "../src/apt_common.hh" /* PkgxHolder, pkgx_apt_map_txn */
+#include "../src/apt_common.hh" /* the shared apt_common descriptor builders */
 #include "../src/digest.h"
 #include "../src/policy.h"
 
@@ -43,18 +44,14 @@
 #include <apt-pkg/cachefile.h>
 #include <apt-pkg/configuration.h>
 #include <apt-pkg/depcache.h>
-#include <apt-pkg/indexfile.h>
 #include <apt-pkg/init.h>
-#include <apt-pkg/metaindex.h>
 #include <apt-pkg/pkgcache.h>
 #include <apt-pkg/pkgsystem.h>
 #include <apt-pkg/sourcelist.h>
 #include <apt-pkg/upgrade.h>
 
-#include <cstring>
 #include <deque>
 #include <iostream>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -88,7 +85,7 @@ void emit_plan(const std::string &resource, const char *hex) {
 
 /* -------- A. transactions (install/remove/purge/upgrade/dist_upgrade). Reuses
  * the effector's resolve shape (APT::Upgrade for the whole-system verbs) and the
- * shared pkgx_apt_map_txn record mapping — no effector refactor. -------- */
+ * shared pkgx_apt_map_txn record mapping. -------- */
 int plan_txn(pkgCacheFile &cache, const std::string &verb,
              const std::vector<std::string> &targets) {
     const bool removal = (verb == "apt.remove" || verb == "apt.purge");
@@ -173,96 +170,17 @@ int plan_txn(pkgCacheFile &cache, const std::string &verb,
     return PLAN_OK;
 }
 
-/* -------- B. update (apt.update): mirrors apt_update.cc's source enumeration
- * verbatim (the option grammar is contract-fixed). No package policy. -------- */
-struct SrcHolder {
-    std::string uri, suite;
-    std::vector<std::string> components;
-    std::vector<const char *> compp;
-    std::vector<std::string> okeys, ovals;
-    std::vector<const char *> okeyp, ovalp;
-};
-
+/* -------- B. update (apt.update): the shared pkgx_apt_map_sources enumeration. No
+ * package policy. -------- */
 int plan_update() {
     pkgSourceList list;
     if (!list.ReadMainList()) {
         std::cerr << "sources unreadable\n";
         return PLAN_INTERNAL;
     }
-    std::deque<SrcHolder> holders;
-    for (pkgSourceList::const_iterator I = list.begin(); I != list.end(); ++I) {
-        metaIndex *mi = *I;
-        if (mi == nullptr) {
-            continue;
-        }
-        SrcHolder h;
-        h.uri = mi->GetURI();
-        h.suite = mi->GetDist();
-        std::set<std::string> comps, arches;
-        for (const IndexTarget &t : mi->GetIndexTargets()) {
-            std::string comp = t.Option(IndexTarget::COMPONENT);
-            if (!comp.empty()) {
-                comps.insert(comp);
-            }
-            std::string arch = t.Option(IndexTarget::ARCHITECTURE);
-            if (!arch.empty()) {
-                arches.insert(arch);
-            }
-        }
-        for (const std::string &cc : comps) {
-            h.components.push_back(cc);
-        }
-        std::string signed_by = mi->GetSignedBy();
-        if (!signed_by.empty()) {
-            h.okeys.push_back("signed-by");
-            h.ovals.push_back(signed_by);
-        }
-        if (!arches.empty()) {
-            std::string joined;
-            for (const std::string &a : arches) {
-                if (!joined.empty()) {
-                    joined += ' ';
-                }
-                joined += a;
-            }
-            h.okeys.push_back("architectures");
-            h.ovals.push_back(joined);
-        }
-        switch (mi->GetTrusted()) {
-        case metaIndex::TRI_YES:
-            h.okeys.push_back("trusted");
-            h.ovals.push_back("yes");
-            break;
-        case metaIndex::TRI_NO:
-            h.okeys.push_back("trusted");
-            h.ovals.push_back("no");
-            break;
-        default:
-            break;
-        }
-        holders.push_back(std::move(h));
-    }
+    std::deque<PkgxSrcHolder> holders;
     std::vector<pkgx_src_record> recs;
-    for (auto &h : holders) {
-        for (auto &cc : h.components) {
-            h.compp.push_back(cc.c_str());
-        }
-        for (auto &k : h.okeys) {
-            h.okeyp.push_back(k.c_str());
-        }
-        for (auto &v : h.ovals) {
-            h.ovalp.push_back(v.c_str());
-        }
-        pkgx_src_record r;
-        r.uri = h.uri.c_str();
-        r.suite = h.suite.c_str();
-        r.components = h.compp.empty() ? nullptr : h.compp.data();
-        r.ncomponents = h.compp.size();
-        r.opt_keys = h.okeyp.empty() ? nullptr : h.okeyp.data();
-        r.opt_vals = h.ovalp.empty() ? nullptr : h.ovalp.data();
-        r.nopts = h.okeyp.size();
-        recs.push_back(r);
-    }
+    pkgx_apt_map_sources(list, holders, recs);
     std::cout << "verb=apt.update resolved_records=" << recs.size() << "\n";
     if (recs.empty()) {
         std::cout << "status=noop\n"; /* no configured sources: nothing to refresh */
@@ -277,26 +195,8 @@ int plan_update() {
     return PLAN_OK;
 }
 
-/* -------- C. hold / unhold: mirrors apt_hold.cc's selection read + change filter,
- * and applies the same ownership refusal (never touch a rapt-owned package). ---- */
-const char *selection_word(unsigned char sel) {
-    switch (sel) {
-    case pkgCache::State::Install:
-        return "install";
-    case pkgCache::State::Hold:
-        return "hold";
-    case pkgCache::State::DeInstall:
-        return "deinstall";
-    case pkgCache::State::Purge:
-        return "purge";
-    default:
-        return "unknown";
-    }
-}
-struct HoldHolder {
-    std::string package, from, to;
-};
-
+/* -------- C. hold / unhold: the shared pkgx_apt_map_hold selection read + change
+ * filter, then the same ownership refusal (never touch a rapt-owned package). ---- */
 int plan_hold(pkgCacheFile &cache, const std::string &verb,
               const std::vector<std::string> &targets) {
     pkgCache *c = cache.GetPkgCache();
@@ -305,29 +205,22 @@ int plan_hold(pkgCacheFile &cache, const std::string &verb,
         return PLAN_INTERNAL;
     }
     bool hold = (verb == "apt.hold");
-    const char *to_state = hold ? "hold" : "install";
-    std::deque<HoldHolder> changes;
+    std::vector<const char *> tp;
     for (const auto &t : targets) {
-        pkgCache::PkgIterator P = c->FindPkg(t);
-        if (P.end()) {
-            std::cerr << "unknown package: " << t << "\n";
-            return PLAN_INTERNAL;
-        }
-        const char *from_state = selection_word(P->SelectedState);
-        if (std::strcmp(from_state, "install") != 0 &&
-            std::strcmp(from_state, "hold") != 0) {
-            std::cerr << "not a hold subject (selection " << from_state
-                      << "): " << t << "\n";
-            return PLAN_INTERNAL;
-        }
-        if (std::strcmp(from_state, to_state) == 0) {
-            continue; /* no change */
-        }
-        HoldHolder h;
-        h.package = t;
-        h.from = from_state;
-        h.to = to_state;
-        changes.push_back(std::move(h));
+        tp.push_back(t.c_str());
+    }
+    std::deque<PkgxHoldHolder> changes;
+    std::vector<pkgx_hold_record> holds;
+    const char *offender = nullptr;
+    pkgx_hold_map hm =
+        pkgx_apt_map_hold(c, tp.data(), tp.size(), hold, changes, holds, &offender);
+    if (hm == PKGX_HOLD_MAP_UNKNOWN) {
+        std::cerr << "unknown package: " << (offender ? offender : "") << "\n";
+        return PLAN_INTERNAL;
+    }
+    if (hm == PKGX_HOLD_MAP_INVALID) {
+        std::cerr << "not a hold subject: " << (offender ? offender : "") << "\n";
+        return PLAN_INTERNAL;
     }
     std::cout << "verb=" << verb << " resolved_records=" << changes.size() << "\n";
     if (changes.empty()) {
@@ -341,18 +234,6 @@ int plan_hold(pkgCacheFile &cache, const std::string &verb,
                       << "\n";
             return PLAN_REFUSED;
         }
-    }
-    std::vector<pkgx_hold_record> holds;
-    for (auto &h : changes) {
-        pkgx_hold_record r;
-        r.package = h.package.c_str();
-        r.from_state = h.from.c_str();
-        r.to_state = h.to.c_str();
-        holds.push_back(r);
-    }
-    std::vector<const char *> tp;
-    for (const auto &t : targets) {
-        tp.push_back(t.c_str());
     }
     std::string resource;
     if (resource_for(tp.data(), tp.size(), resource) != 0) { /* over ALL targets */
@@ -369,55 +250,27 @@ int plan_hold(pkgCacheFile &cache, const std::string &verb,
     return PLAN_OK;
 }
 
-/* -------- D. configure: mirrors apt_configure.cc — the half-installed pre-plan
- * BROKEN refusal, the pending-set enumeration, and the same ownership refusal. -- */
-const char *pending_state(unsigned char cur) {
-    switch (cur) {
-    case pkgCache::State::UnPacked:
-        return "unpacked";
-    case pkgCache::State::HalfConfigured:
-        return "half-configured";
-    case pkgCache::State::TriggersAwaited:
-        return "triggers-awaited";
-    case pkgCache::State::TriggersPending:
-        return "triggers-pending";
-    default:
-        return nullptr;
-    }
-}
-struct CfgHolder {
-    std::string package, arch, version, state;
-};
-
+/* -------- D. configure: the shared pkgx_apt_map_configure enumeration (with its
+ * half-installed pre-plan BROKEN refusal) and the same ownership refusal. -------- */
 int plan_configure(pkgCacheFile &cache) {
     pkgCache *c = cache.GetPkgCache();
     if (c == nullptr) {
         std::cerr << "cache unavailable\n";
         return PLAN_INTERNAL;
     }
-    std::deque<CfgHolder> holders;
-    for (pkgCache::PkgIterator P = c->PkgBegin(); !P.end(); ++P) {
-        if (P->CurrentState == pkgCache::State::HalfInstalled) {
-            /* Unrepairable by configure: the effector refuses BROKEN before the
-             * receipt is spent, so there is no plan to bind. */
-            std::cout << "verb=apt.configure status=refused reason=broken offender="
-                      << P.Name() << "\n";
-            return PLAN_REFUSED;
-        }
-        const char *state = pending_state(P->CurrentState);
-        if (state == nullptr) {
-            continue;
-        }
-        CfgHolder h;
-        h.package = P.Name();
-        h.arch = P.Arch();
-        pkgCache::VerIterator cur = P.CurrentVer();
-        h.version = cur.end() ? "" : cur.VerStr();
-        h.state = state;
-        holders.push_back(std::move(h));
+    std::deque<PkgxCfgHolder> holders;
+    std::vector<pkgx_cfg_record> cfgs;
+    const char *half_installed = nullptr;
+    if (pkgx_apt_map_configure(c, holders, cfgs, &half_installed) ==
+        PKGX_CFG_MAP_HALF_INSTALLED) {
+        /* Unrepairable by configure: the effector refuses BROKEN before the receipt
+         * is spent, so there is no plan to bind. */
+        std::cout << "verb=apt.configure status=refused reason=broken offender="
+                  << (half_installed ? half_installed : "") << "\n";
+        return PLAN_REFUSED;
     }
-    std::cout << "verb=apt.configure resolved_records=" << holders.size() << "\n";
-    if (holders.empty()) {
+    std::cout << "verb=apt.configure resolved_records=" << cfgs.size() << "\n";
+    if (cfgs.empty()) {
         std::cout << "status=noop\n"; /* nothing pending: nothing to configure */
         return PLAN_NOOP;
     }
@@ -428,15 +281,6 @@ int plan_configure(pkgCacheFile &cache) {
                       << "\n";
             return PLAN_REFUSED;
         }
-    }
-    std::vector<pkgx_cfg_record> cfgs;
-    for (auto &h : holders) {
-        pkgx_cfg_record r;
-        r.package = h.package.c_str();
-        r.architecture = h.arch.c_str();
-        r.current_version = h.version.c_str();
-        r.state = h.state.c_str();
-        cfgs.push_back(r);
     }
     char hex[PKGEXEC_DIGEST_HEX + 1];
     if (pkgx_digest_configure(cfgs.data(), cfgs.size(), hex, nullptr, nullptr) !=
