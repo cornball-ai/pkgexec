@@ -35,8 +35,8 @@ POLKIT_RULESDIR ?= $(PREFIX)/share/polkit-1/rules.d
 
 .PHONY: all check test-digest test-request test-harden test-exec-child \
         test-redeem test-policy test-plan test-effect test-apt-outcome \
-        test-spawn test-result test-rapt test-transport fuzz probe plan effect \
-        entrypoints clean install
+        test-spawn test-result test-rapt test-transport fuzz probe plan preview \
+        effect entrypoints clean install
 
 all: libpkgexec.a
 
@@ -152,6 +152,19 @@ plan: tools/plan.cc src/digest.c src/policy.c src/apt_common.cc
 	$(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 $(WARN) tools/plan.cc \
 	    src/apt_common.cc digest.o policy.o -o pkgexec-plan $(LDFLAGS) \
 	    -lapt-pkg $(CRYPTO_LIBS)
+
+# Read-only unprivileged planner (pkgops production preview). Shares the SAME
+# apt_common descriptor builders + digest + policy the effectors use, but takes NO
+# lock, runs NO dpkg/fetch/shell, and spends NO receipt: it maps the read-only cache
+# to the schema-1 records and prints the plan_hash as one JSON object on stdout
+# (Jansson), diagnostics on stderr. Runtime is unprivileged; CI builds it as the
+# planner linkage proof. Requires libapt-pkg-dev + libssl-dev + libjansson-dev.
+preview: tools/preview.cc src/apt_common.cc src/digest.c src/policy.c src/request.c
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(JSON_CFLAGS) $(CRYPTO_CFLAGS) -c \
+	    src/digest.c src/policy.c src/request.c
+	$(CXX) $(CPPFLAGS) $(DPKG_CXXFLAGS) -std=c++17 $(WARN) $(JSON_CFLAGS) \
+	    tools/preview.cc src/apt_common.cc digest.o policy.o request.o \
+	    -o runix-apt-preview $(LDFLAGS) -lapt-pkg $(CRYPTO_LIBS) $(JSON_LIBS)
 
 # Commit effectors (activation, all four mechanisms): the C core
 # (parse/policy/digest/redeem/gate/transport/spawn) linked with the C++ libapt

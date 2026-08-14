@@ -367,3 +367,114 @@ void pkgx_request_free(pkgx_request *req) {
         req->npackages = 0;
     }
 }
+
+/* ---- preview request (verb-carrying, receipt-free) -------------------- */
+
+static const char *PREVIEW_ALLOWED[] = {"schema_version", "verb", "packages"};
+
+static int is_preview_key(const char *k) {
+    for (size_t i = 0; i < sizeof PREVIEW_ALLOWED / sizeof *PREVIEW_ALLOWED; i++) {
+        if (strcmp(k, PREVIEW_ALLOWED[i]) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int pkgx_parse_preview_request(const char *body, size_t len,
+                               pkgx_preview_request *out, const char **errcode) {
+    memset(out, 0, sizeof *out);
+    json_error_t err;
+    json_t *root = json_loadb(body, len, JSON_REJECT_DUPLICATES, &err);
+    if (root == NULL) {
+        *errcode = "bad_json";
+        return -1;
+    }
+    const char *ec = "schema_invalid";
+    if (!json_is_object(root) || depth(root) > PKGX_MAX_DEPTH) {
+        goto fail;
+    }
+    {
+        const char *k;
+        json_t *v;
+        json_object_foreach(root, k, v) {
+            if (!is_preview_key(k)) {
+                goto fail;
+            }
+        }
+    }
+
+    json_t *js = json_object_get(root, "schema_version");
+    if (!json_is_integer(js) || json_integer_value(js) != 1) {
+        goto fail;
+    }
+
+    const char *verb = str_clean(json_object_get(root, "verb"));
+    if (verb == NULL) {
+        goto fail;
+    }
+    int arity = verb_arity(verb);
+    if (arity < 0) {
+        ec = "unknown_request"; /* verb outside the nine-verb allowlist */
+        goto fail;
+    }
+    if (strlen(verb) >= sizeof out->verb) { /* unreachable: every verb fits */
+        goto fail;
+    }
+    strcpy(out->verb, verb);
+
+    json_t *jpk = json_object_get(root, "packages");
+    if (!json_is_array(jpk)) {
+        goto fail;
+    }
+    size_t np = json_array_size(jpk);
+    if (np > PKGX_MAX_PACKAGES) {
+        goto fail;
+    }
+    if ((arity == ARITY_NONE && np != 0) || (arity == ARITY_ONE_PLUS && np == 0)) {
+        goto fail;
+    }
+    out->packages = calloc(np ? np : 1, sizeof *out->packages);
+    if (out->packages == NULL) {
+        goto fail;
+    }
+    for (size_t i = 0; i < np; i++) {
+        const char *name = str_clean(json_array_get(jpk, i));
+        if (name == NULL || !name_ok(name)) {
+            goto fail;
+        }
+        for (size_t j = 0; j < i; j++) { /* refuse duplicate requested packages */
+            if (strcmp(out->packages[j], name) == 0) {
+                goto fail;
+            }
+        }
+        out->packages[i] = strdup(name);
+        if (out->packages[i] == NULL) {
+            goto fail;
+        }
+        out->npackages = i + 1;
+    }
+
+    json_decref(root);
+    return 0;
+
+fail:
+    json_decref(root);
+    pkgx_preview_request_free(out);
+    *errcode = ec;
+    return -1;
+}
+
+void pkgx_preview_request_free(pkgx_preview_request *req) {
+    if (req == NULL) {
+        return;
+    }
+    if (req->packages != NULL) {
+        for (size_t i = 0; i < req->npackages; i++) {
+            free(req->packages[i]);
+        }
+        free(req->packages);
+        req->packages = NULL;
+        req->npackages = 0;
+    }
+}
