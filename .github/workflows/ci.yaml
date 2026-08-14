@@ -99,4 +99,13 @@ jobs:
           if echo '{}' | /usr/libexec/pkgexec/runix-apt-update; then
             echo "entrypoint should fail without PKEXEC_UID"; exit 1
           fi
+          # the unprivileged planner is installed on PATH and runs unprivileged
+          test -x /usr/bin/runix-apt-preview
+          # schema_invalid never opens the cache, so it is deterministic
+          si=$(printf 'not json' | runix-apt-preview) || true
+          echo "$si" | grep -q '"schema_version":1,"status":"schema_invalid"'
+          # end-to-end on the runner's real (path-signed) sources: one JSON object
+          upd=$(printf '{"schema_version":1,"verb":"apt.update","packages":[]}' | runix-apt-preview) || true
+          echo "$upd" | grep -q '"schema_version":1'
+          echo "$upd" | grep -q '"verb":"apt.update"'
           sudo dpkg -r pkgexec

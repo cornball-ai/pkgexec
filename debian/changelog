@@ -1,3 +1,24 @@
+pkgexec (0.0.3) unstable; urgency=medium
+
+  * runix-apt-preview: a new unprivileged, read-only planner installed on PATH
+    (/usr/bin). It reads the receipt-free stdin request {schema_version, verb,
+    packages}, opens the apt cache without the dpkg lock, and prints one strict
+    JSON object with the schema-1 resource and plan_hash. It is the single
+    implementation of the preview descriptor/digest the pkgops issuer previews
+    against, sharing the effectors' apt_common descriptor builders, policy, and
+    digest; it commits nothing (no lock, no dpkg, no fetch, no shell, no receipt).
+  * signed-by inline-armored-key normalization: an inline Signed-By PGP key carries
+    '=' and newlines the schema-1 field grammar forbids, so apt.update failed closed
+    on such a source (e.g. one shipping an embedded key). The shared source
+    enumeration now maps a valid inline armored key to inline-sha256:<hex> over its
+    exact bytes, binding the source's signing-key identity within the grammar.
+    Path/fingerprint values are unchanged, so existing update hashes and plan
+    schema 1 are preserved.
+  * Checkpoint 1 of the planner slice extracted shared read-only descriptor builders
+    for update/hold/configure into apt_common; the effectors are byte-identical.
+
+ -- Troy Hernandez <troy@cornball.ai>  Fri, 14 Aug 2026 20:00:00 +0000
+
 pkgexec (0.0.2) unstable; urgency=medium
 
   * Activation: the nine per-verb pkexec/polkit entrypoints

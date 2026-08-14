@@ -28,6 +28,7 @@ CRYPTO_LIBS   := $(shell pkg-config --libs libcrypto 2>/dev/null)
 SAN := -fsanitize=address,undefined -g
 
 PREFIX ?= /usr
+BINDIR ?= $(PREFIX)/bin
 DOCDIR ?= $(PREFIX)/share/doc/pkgexec
 LIBEXECDIR ?= $(PREFIX)/libexec/pkgexec
 POLKIT_ACTIONDIR ?= $(PREFIX)/share/polkit-1/actions
@@ -252,13 +253,15 @@ clean:
 	    build-test-rapt build-test-transport fuzz-request pkgexec-probe \
 	    pkgexec-plan pkgexec-effect entrypoint-runix-apt-*.o runix-apt-*
 
-# Install docs + corpus, the nine per-verb entrypoints (each to the immutable path
-# its polkit action names), and the polkit action + autonomous-verb rule. The
-# runix-apt-autonomous group is created by the package's postinst, not here.
-install: all entrypoints
+# Install docs + corpus, the unprivileged planner (on PATH), the nine per-verb
+# entrypoints (each to the immutable path its polkit action names), and the polkit
+# action + autonomous-verb rule. The runix-apt-autonomous group is created by the
+# package's postinst, not here.
+install: all entrypoints preview
 	install -D -m 0644 README.md $(DESTDIR)$(DOCDIR)/README.md
 	install -D -m 0644 tests/fixtures/plan-digest/vectors.json \
 	    $(DESTDIR)$(DOCDIR)/plan-digest-vectors.json
+	install -D -m 0755 runix-apt-preview $(DESTDIR)$(BINDIR)/runix-apt-preview
 	@for spec in $(ENTRY_SPECS); do \
 	    bin=$${spec##*:}; \
 	    echo "  INSTALL $(LIBEXECDIR)/$$bin"; \
