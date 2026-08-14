@@ -40,6 +40,17 @@ jobs:
       - name: Locked libapt resolve — link check (slice 2, not run in CI)
         run: make plan   # compile+link only; runtime takes the dpkg lock (VM-gated)
 
+      - name: Read-only planner (preview) — link check + apt-independent emit smoke
+        run: |
+          make preview
+          # the schema_invalid path returns before opening any cache, so it is
+          # deterministic in CI (no apt state, no lock). Prove the binary emits the
+          # uniform shape and exits nonzero for a non-ok/no_op status.
+          out=$(printf 'not json' | ./runix-apt-preview) || rc=$?
+          echo "$out"
+          echo "$out" | grep -q '"schema_version":1,"status":"schema_invalid"'
+          test "${rc:-0}" -ne 0
+
       - name: Commit effectors (all four) — link check (not run in CI)
         run: make effect  # compile+link only; commits require root+broker (VM-gated)
 
