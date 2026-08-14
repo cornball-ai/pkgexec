@@ -157,6 +157,17 @@ void pkgx_apt_map_sources(pkgSourceList &list, std::deque<PkgxSrcHolder> &holder
         }
         std::string signed_by = mi->GetSignedBy();
         if (!signed_by.empty()) {
+            /* An inline armored key carries '=' and newlines that the schema-1
+             * field grammar forbids; normalize it to a stable content-hash token so
+             * the source's signing-key identity is still bound. Paths/fingerprints
+             * (field-safe) pass through byte-for-byte. On a hash failure the
+             * original is kept, so the digest fails closed rather than emitting a
+             * wrong hash. See pkgx_signed_by_inline_token (digest.h). */
+            char token[PKGX_SIGNEDBY_TOKEN_LEN + 1];
+            if (pkgx_signed_by_inline_token(signed_by.c_str(), signed_by.size(),
+                                            token) == 1) {
+                signed_by = token;
+            }
             h.okeys.push_back("signed-by");
             h.ovals.push_back(signed_by);
         }
