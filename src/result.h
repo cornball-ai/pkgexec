@@ -39,6 +39,15 @@ int pkgx_result_json(pkgx_apt_status st, int effect_issued,
 int pkgx_result_emit(int fd, pkgx_apt_status st, int effect_issued,
                      const char *correlation_id, const char *detail);
 
+/* Isolate the result channel BEFORE any effector runs. dup the current stdout to a
+ * fresh close-on-exec fd — the ONLY fd the strict JSON result is ever written to —
+ * then point stdout (fd 1) at stderr, so anything an effector, the libapt commit, or
+ * a spawned dpkg writes to fd 1 lands on stderr and never pollutes the protocol
+ * channel. The dedicated fd is CLOEXEC (a spawned child cannot inherit it), and
+ * stdout is NEVER restored. Returns the dedicated result fd (>= 0), or -1 on failure
+ * (fail closed: the caller must exit without emitting a result). */
+int pkgx_result_channel_open(void);
+
 #ifdef __cplusplus
 }
 #endif

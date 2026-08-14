@@ -30,8 +30,8 @@
 /* Same uniform result channel as the real entrypoint (this diagnostic mirrors
  * it): every helper-executed failure emits an internal result with
  * effect_issued=false; stderr is only for a failure to emit the record itself. */
-static int fail_result(const char *cid, const char *detail) {
-    if (pkgx_result_emit(STDOUT_FILENO, PKGX_APT_INTERNAL, 0, cid, detail) != 0) {
+static int fail_result(int rfd, const char *cid, const char *detail) {
+    if (pkgx_result_emit(rfd, PKGX_APT_INTERNAL, 0, cid, detail) != 0) {
         fprintf(stderr, "result: could not emit\n");
     }
     return 1;
@@ -44,10 +44,19 @@ int main(int argc, char **argv) {
     }
     const char *verb = argv[1];
 
+    /* Isolate the result channel BEFORE anything runs, exactly like the entrypoint:
+     * fd 1 becomes stderr and the strict JSON result goes only to a dedicated
+     * close-on-exec fd, so no effector / libapt / spawned dpkg output pollutes it. */
+    int rfd = pkgx_result_channel_open();
+    if (rfd < 0) {
+        fprintf(stderr, "result: cannot isolate the result channel\n");
+        return 1;
+    }
+
     /* Trusted uid first — before the environment is scrubbed. */
     uid_t uid = 0;
     if (pkgx_read_pkexec_uid(&uid) != 0) {
-        return fail_result("", "pkexec_uid");
+        return fail_result(rfd, "", "pkexec_uid");
     }
 
     /* Parse the request off fd 0 while it is still the caller's pipe. */
@@ -55,7 +64,7 @@ int main(int argc, char **argv) {
     size_t len = 0;
     const char *ec = NULL;
     if (pkgx_read_stdin(STDIN_FILENO, &body, &len, &ec) != 0) {
-        return fail_result("", ec ? ec : "stdin");
+        return fail_result(rfd, "", ec ? ec : "stdin");
     }
     pkgx_request req;
     const char *pe = NULL;
@@ -63,7 +72,7 @@ int main(int argc, char **argv) {
     pkgx_secure_wipe(body, len); /* the body carried the receipt */
     free(body);
     if (prc != 0) {
-        return fail_result("", pe ? pe : "schema_invalid");
+        return fail_result(rfd, "", pe ? pe : "schema_invalid");
     }
 
     /* Hygiene before any dpkg/maintainer script runs — fail closed: a privileged
@@ -71,7 +80,7 @@ int main(int argc, char **argv) {
      * be neutralized, or inherited descriptors cannot be closed. */
     if (pkgx_scrub_env() != 0 || pkgx_null_stdin() != 0 ||
         pkgx_cloexec_from(3) != 0) {
-        int rc = fail_result(req.correlation_id, "hygiene");
+        int rc = fail_result(rfd, req.correlation_id, "hygiene");
         pkgx_request_free(&req);
         return rc;
     }
@@ -111,7 +120,7 @@ int main(int argc, char **argv) {
 
     /* The result channel: exactly the strict JSON a stage-3 entrypoint emits,
      * written in full over the same helper path. */
-    int emitted = pkgx_result_emit(STDOUT_FILENO, st, issued, out_cid, detail);
+    int emitted = pkgx_result_emit(rfd, st, issued, out_cid, detail);
     pkgx_request_free(&req);
     if (emitted != 0) {
         fprintf(stderr, "result: could not emit\n");

@@ -9,6 +9,7 @@
 #include <jansson.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static int checks = 0;
@@ -170,6 +171,80 @@ int main(void) {
         int rc = pkgx_result_emit(cfd[1], PKGX_APT_OK, 0, "", "ok");
         close(cfd[1]);
         CHECK(rc == -1, "emit: closed pipe -> -1, process survived");
+    }
+
+    /* --- result-channel isolation: an effector/dpkg writing garbage to stdout must
+     * NOT reach the protocol channel. In a child, wire fd1->respipe and fd2->errpipe,
+     * open the result channel (dups fd1 to a CLOEXEC result fd, redirects fd1 to fd2),
+     * splatter garbage on fd1/stdio, then emit ONE result to the dedicated fd. The
+     * respipe must carry exactly one valid JSON object; the garbage lands on fd2. --- */
+    int rp[2], ep[2];
+    if (pipe(rp) == 0 && pipe(ep) == 0) {
+        pid_t pid = fork();
+        if (pid == 0) {
+            if (dup2(rp[1], STDOUT_FILENO) < 0 || dup2(ep[1], STDERR_FILENO) < 0) {
+                _exit(2);
+            }
+            close(rp[0]);
+            close(rp[1]);
+            close(ep[0]);
+            close(ep[1]);
+            int rfd = pkgx_result_channel_open(); /* fd1 now points at the err pipe */
+            if (rfd < 0) {
+                _exit(3);
+            }
+            const char *g = "Unpacking canary (1.0)...\nSetting up canary...\n{bad\n";
+            (void) !write(STDOUT_FILENO, g, strlen(g)); /* raw write to fd1 */
+            printf("buffered stdio garbage\n");         /* stdio to fd1 */
+            fflush(stdout);
+            pkgx_result_emit(rfd, PKGX_APT_OK, 1,
+                             "20250101000000000000-0123456789abcdef", "ok");
+            _exit(0);
+        }
+        close(rp[1]);
+        close(ep[1]);
+        char resbuf[2048];
+        size_t rn = 0;
+        ssize_t t;
+        while (rn < sizeof resbuf - 1 &&
+               (t = read(rp[0], resbuf + rn, sizeof resbuf - 1 - rn)) > 0) {
+            rn += (size_t) t;
+        }
+        resbuf[rn] = '\0';
+        close(rp[0]);
+        char errbuf[2048];
+        size_t en = 0;
+        while (en < sizeof errbuf - 1 &&
+               (t = read(ep[0], errbuf + en, sizeof errbuf - 1 - en)) > 0) {
+            en += (size_t) t;
+        }
+        errbuf[en] = '\0';
+        close(ep[0]);
+        int cst = 0;
+        waitpid(pid, &cst, 0);
+        int nl = 0;
+        for (size_t i = 0; i < rn; i++) {
+            if (resbuf[i] == '\n') {
+                nl++;
+            }
+        }
+        CHECK(nl == 1 && rn > 1 && resbuf[rn - 1] == '\n',
+              "isolate: exactly one line on the result channel");
+        CHECK(strstr(resbuf, "Unpacking") == NULL && strstr(resbuf, "Setting up") == NULL,
+              "isolate: no commit garbage on the result channel");
+        if (rn > 0) {
+            resbuf[rn - 1] = '\0'; /* drop newline, parse */
+            json_error_t ierr;
+            json_t *io = json_loads(resbuf, 0, &ierr);
+            CHECK(io != NULL, "isolate: result channel is one valid JSON object");
+            if (io != NULL) {
+                CHECK(is_str_eq(io, "status", "ok"), "isolate: status ok");
+                CHECK(is_bool_eq(io, "effect_issued", 1), "isolate: effect_issued true");
+                json_decref(io);
+            }
+        }
+        CHECK(strstr(errbuf, "Unpacking") != NULL,
+              "isolate: commit garbage was diverted to stderr");
     }
 
     printf("%d checks, %d failures\n", checks, failures);

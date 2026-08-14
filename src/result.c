@@ -2,6 +2,7 @@
 #include "result.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <jansson.h>
 #include <signal.h>
 #include <string.h>
@@ -119,4 +120,23 @@ int pkgx_result_emit(int fd, pkgx_apt_status st, int effect_issued,
         rc = -1; /* restoration failed: report so the caller does not trust it */
     }
     return rc;
+}
+
+int pkgx_result_channel_open(void) {
+    /* Save the caller's stdout as the dedicated, close-on-exec result fd. */
+    int rfd = dup(STDOUT_FILENO);
+    if (rfd < 0) {
+        return -1;
+    }
+    if (fcntl(rfd, F_SETFD, FD_CLOEXEC) != 0) {
+        close(rfd);
+        return -1;
+    }
+    /* Point fd 1 at stderr: effector / libapt / spawned-dpkg output on stdout now
+     * lands on stderr, never in the result channel. Never restored. */
+    if (dup2(STDERR_FILENO, STDOUT_FILENO) < 0) {
+        close(rfd);
+        return -1;
+    }
+    return rfd;
 }

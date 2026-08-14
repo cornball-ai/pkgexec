@@ -9,7 +9,9 @@
  * Flow: read the trusted PKEXEC_UID (before the env is scrubbed) → parse the
  * strict stdin request for THIS verb → scrub env / neutralize stdin / close
  * inherited fds (fail closed) → drive the matching effector over the authenticated
- * broker transport → emit the strict result JSON (with effect_issued) on stdout.
+ * broker transport → emit the strict result JSON (with effect_issued) on a dedicated
+ * close-on-exec result fd (fd 1 is redirected to stderr first, so no commit output
+ * pollutes the protocol channel).
  *
  * pkexec runs this as root after the polkit check; it commits nothing without a
  * real redeem_ok, so its runtime is exercised only on a disposable VM. CI compiles
@@ -34,8 +36,8 @@
  * request parsed (else ""), and a detail tag. stderr is reserved for the one thing
  * the channel itself cannot report — a failure to serialize or write the record.
  * Returns the process exit code (always 1: a reported failure is still a failure). */
-static int fail_result(const char *cid, const char *detail) {
-    if (pkgx_result_emit(STDOUT_FILENO, PKGX_APT_INTERNAL, 0, cid, detail) != 0) {
+static int fail_result(int rfd, const char *cid, const char *detail) {
+    if (pkgx_result_emit(rfd, PKGX_APT_INTERNAL, 0, cid, detail) != 0) {
         fprintf(stderr, "result: could not emit\n");
     }
     return 1;
@@ -45,10 +47,19 @@ int main(void) {
     /* The verb is fixed at build time. argv is deliberately never consulted. */
     const char *verb = PKGX_VERB;
 
+    /* Isolate the result channel BEFORE anything runs: fd 1 becomes stderr, and the
+     * strict JSON result is written only to a dedicated close-on-exec fd, so no
+     * effector, libapt commit, or spawned dpkg can pollute the protocol channel. */
+    int rfd = pkgx_result_channel_open();
+    if (rfd < 0) {
+        fprintf(stderr, "result: cannot isolate the result channel\n");
+        return 1;
+    }
+
     /* Trusted uid first — before the environment is scrubbed. */
     uid_t uid = 0;
     if (pkgx_read_pkexec_uid(&uid) != 0) {
-        return fail_result("", "pkexec_uid");
+        return fail_result(rfd, "", "pkexec_uid");
     }
 
     /* Parse the request off fd 0 while it is still the caller's pipe. The reader
@@ -57,7 +68,7 @@ int main(void) {
     size_t len = 0;
     const char *ec = NULL;
     if (pkgx_read_stdin(STDIN_FILENO, &body, &len, &ec) != 0) {
-        return fail_result("", ec ? ec : "stdin");
+        return fail_result(rfd, "", ec ? ec : "stdin");
     }
     pkgx_request req;
     const char *pe = NULL;
@@ -66,13 +77,13 @@ int main(void) {
     free(body);
     if (prc != 0) {
         /* Parsing never completed: no correlation id to report. */
-        return fail_result("", pe ? pe : "schema_invalid");
+        return fail_result(rfd, "", pe ? pe : "schema_invalid");
     }
 
     /* Hygiene before any dpkg/maintainer script runs — fail closed. */
     if (pkgx_scrub_env() != 0 || pkgx_null_stdin() != 0 ||
         pkgx_cloexec_from(3) != 0) {
-        int rc = fail_result(req.correlation_id, "hygiene");
+        int rc = fail_result(rfd, req.correlation_id, "hygiene");
         pkgx_request_free(&req);
         return rc;
     }
@@ -113,7 +124,7 @@ int main(void) {
     /* The result channel: one strict JSON object with a first-class effect_issued,
      * written in full (a closed/short result pipe is a reported failure, exit 1,
      * never an apparent success). */
-    int emitted = pkgx_result_emit(STDOUT_FILENO, st, issued, out_cid, detail);
+    int emitted = pkgx_result_emit(rfd, st, issued, out_cid, detail);
     pkgx_request_free(&req);
     if (emitted != 0) {
         fprintf(stderr, "result: could not emit\n");
