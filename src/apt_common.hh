@@ -14,6 +14,7 @@
 
 #include <apt-pkg/acquire.h>
 #include <apt-pkg/cachefile.h>
+#include <apt-pkg/sourcelist.h>
 
 #include <deque>
 #include <string>
@@ -40,6 +41,59 @@ void pkgx_apt_set_lock_timeout(int seconds);
 void pkgx_apt_map_txn(pkgCache *cache, pkgDepCache *dc,
                       std::deque<PkgxHolder> &holders,
                       std::vector<pkgx_txn_record> &recs);
+
+/* Per-verb stable record storage for the update/hold/configure descriptors, shared so
+ * the effector and the read-only planner build byte-identical records from ONE code
+ * path (no mirrored enumeration). The C records borrow these; a deque never moves its
+ * elements, so the pointers stay valid through digest + redeem. */
+struct PkgxSrcHolder {
+    std::string uri, suite;
+    std::vector<std::string> components;
+    std::vector<const char *> compp;
+    std::vector<std::string> okeys, ovals;
+    std::vector<const char *> okeyp, ovalp;
+};
+struct PkgxHoldHolder {
+    std::string package, from, to;
+    bool want_hold; /* the intended post-write selection, for the effector read-back */
+};
+struct PkgxCfgHolder {
+    std::string package, arch, version, state;
+};
+
+/* apt.update: map the configured source list to the schema-1 source records — one per
+ * (uri, suite) with its distinct components and the identity-relevant options. */
+void pkgx_apt_map_sources(pkgSourceList &list, std::deque<PkgxSrcHolder> &holders,
+                          std::vector<pkgx_src_record> &recs);
+
+/* apt.hold / apt.unhold: read each target's current dpkg selection and keep only the
+ * ones that actually change (an already-in-target transition is dropped). A target
+ * absent from the cache is PKGX_HOLD_MAP_UNKNOWN; a target selected for anything but
+ * install/hold is PKGX_HOLD_MAP_INVALID; `*offender` (when non-NULL) names it. `hold`
+ * is true for apt.hold, false for apt.unhold. */
+enum pkgx_hold_map {
+    PKGX_HOLD_MAP_OK = 0,
+    PKGX_HOLD_MAP_UNKNOWN,
+    PKGX_HOLD_MAP_INVALID
+};
+pkgx_hold_map pkgx_apt_map_hold(pkgCache *cache, const char *const *targets,
+                                size_t ntargets, bool hold,
+                                std::deque<PkgxHoldHolder> &changes,
+                                std::vector<pkgx_hold_record> &recs,
+                                const char **offender);
+
+/* apt.configure: enumerate the pending-configuration set (unpacked / half-configured
+ * / triggers pending-or-awaited) into the schema-1 configure records. A half-installed
+ * package is unrepairable by configure — PKGX_CFG_MAP_HALF_INSTALLED with `*name` (when
+ * non-NULL) set to it, so the caller refuses BROKEN before the receipt is spent. */
+enum pkgx_cfg_map {
+    PKGX_CFG_MAP_OK = 0,
+    PKGX_CFG_MAP_HALF_INSTALLED
+};
+pkgx_cfg_map pkgx_apt_map_configure(pkgCache *cache,
+                                    std::deque<PkgxCfgHolder> &holders,
+                                    std::vector<pkgx_cfg_record> &recs,
+                                    const char **name);
 
 /* A headless acquire status: no media swapping, no interactive prompts — the
  * only pure virtual of pkgAcquireStatus. */

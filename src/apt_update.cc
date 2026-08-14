@@ -22,28 +22,15 @@
 #include <apt-pkg/configuration.h>
 #include <apt-pkg/error.h>
 #include <apt-pkg/fileutl.h>
-#include <apt-pkg/indexfile.h>
-#include <apt-pkg/metaindex.h>
 #include <apt-pkg/pkgcache.h>
 #include <apt-pkg/sourcelist.h>
 #include <apt-pkg/update.h>
 
-#include <set>
 #include <string>
 #include <unistd.h>
 #include <vector>
 
 namespace {
-
-/* Per-source stable storage: the C src records borrow these strings, and a deque
- * never moves its elements, so the pointers stay valid through digest + redeem. */
-struct SrcHolder {
-    std::string uri, suite;
-    std::vector<std::string> components;
-    std::vector<const char *> compp;
-    std::vector<std::string> okeys, ovals;
-    std::vector<const char *> okeyp, ovalp;
-};
 
 /* The retained context: the very source list that was digested is the list
  * ListUpdate refreshes (the digested plan is the committed plan). */
@@ -130,93 +117,12 @@ extern "C" pkgx_apt_status pkgx_apt_update_effect(
      * refresh is COMMIT_FAILED, not OK. */
     _config->Set("APT::Update::Error-Mode", "any");
 
-    /* Enumerate the configured sources into schema-1 source records. One record
-     * per (uri, suite): its distinct components, and the identity-relevant
-     * options. v1 binds signed-by (the security-critical keyring/fingerprint);
-     * further per-source options are a contract refinement to settle with the R
-     * issue side, which mirrors this enumeration. */
-    std::deque<SrcHolder> holders;
-    for (pkgSourceList::const_iterator I = list.begin(); I != list.end(); ++I) {
-        metaIndex *mi = *I;
-        if (mi == nullptr) {
-            continue;
-        }
-        SrcHolder h;
-        h.uri = mi->GetURI();
-        h.suite = mi->GetDist();
-        std::set<std::string> comps, arches;
-        for (const IndexTarget &t : mi->GetIndexTargets()) {
-            std::string comp = t.Option(IndexTarget::COMPONENT);
-            if (!comp.empty()) {
-                comps.insert(comp);
-            }
-            std::string arch = t.Option(IndexTarget::ARCHITECTURE);
-            if (!arch.empty()) {
-                arches.insert(arch);
-            }
-        }
-        for (const std::string &c : comps) {
-            h.components.push_back(c);
-        }
-        /* Options: the fixed identity key set {signed-by, architectures, trusted}
-         * (contract § Plan digest). architectures is the bytewise-sorted arch set
-         * joined by a single space — within the delimiter grammar (space is not
-         * US/RS/','/'='); trusted binds the explicit [trusted=yes|no] that
-         * overrides signature checks, distinct from computed IsTrusted(). Each key
-         * is emitted only when set; the digest encoder sorts the k=v list. */
-        std::string signed_by = mi->GetSignedBy();
-        if (!signed_by.empty()) {
-            h.okeys.push_back("signed-by");
-            h.ovals.push_back(signed_by);
-        }
-        if (!arches.empty()) {
-            std::string joined;
-            for (const std::string &a : arches) {
-                if (!joined.empty()) {
-                    joined += ' ';
-                }
-                joined += a;
-            }
-            h.okeys.push_back("architectures");
-            h.ovals.push_back(joined);
-        }
-        switch (mi->GetTrusted()) {
-        case metaIndex::TRI_YES:
-            h.okeys.push_back("trusted");
-            h.ovals.push_back("yes");
-            break;
-        case metaIndex::TRI_NO:
-            h.okeys.push_back("trusted");
-            h.ovals.push_back("no");
-            break;
-        default:
-            break; /* TRI_UNSET / TRI_DONTCARE: not explicitly set — omit */
-        }
-        holders.push_back(std::move(h));
-    }
-
-    /* Settle the borrowed pointers from the stable deque elements. */
+    /* Enumerate the configured sources into the schema-1 source records via the
+     * shared builder (the same one the read-only planner uses), so preview and commit
+     * derive an identical digest from one code path. */
+    std::deque<PkgxSrcHolder> holders;
     std::vector<pkgx_src_record> recs;
-    for (auto &h : holders) {
-        for (auto &c : h.components) {
-            h.compp.push_back(c.c_str());
-        }
-        for (auto &k : h.okeys) {
-            h.okeyp.push_back(k.c_str());
-        }
-        for (auto &v : h.ovals) {
-            h.ovalp.push_back(v.c_str());
-        }
-        pkgx_src_record r;
-        r.uri = h.uri.c_str();
-        r.suite = h.suite.c_str();
-        r.components = h.compp.empty() ? nullptr : h.compp.data();
-        r.ncomponents = h.compp.size();
-        r.opt_keys = h.okeyp.empty() ? nullptr : h.okeyp.data();
-        r.opt_vals = h.ovalp.empty() ? nullptr : h.ovalp.data();
-        r.nopts = h.okeyp.size();
-        recs.push_back(r);
-    }
+    pkgx_apt_map_sources(list, holders, recs);
 
     /* update has no package policy, so the plan detail here is only a redeem code
      * (stable), but snapshot uniformly into the caller buffer all the same. */
