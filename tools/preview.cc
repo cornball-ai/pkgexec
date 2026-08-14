@@ -10,9 +10,17 @@
  * It is an ORACLE, not an authority (pkgops-plan.md): its preview is advisory.
  * The locked pkgexec re-resolution at redeem remains authoritative; if the cache
  * shifts between preview and redeem the hashes differ and redemption fails closed
- * (no_intent), so a stale preview can never cause an unintended effect. Because it
- * shares the effectors' resolve/map/digest, a matching cache yields the matching
- * hash by construction, so pkgops can drive a real receipt from this hash.
+ * (no_intent), so a stale preview can never cause an unintended effect.
+ *
+ * What is SHARED with the effectors is the invariant that matters: the descriptor
+ * construction (apt_common `pkgx_apt_map_*`), the policy, and the schema-1 digest.
+ * A matching cache therefore yields the matching hash, so pkgops can drive a real
+ * receipt from this hash. What is deliberately NOT shared is the transaction
+ * RESOLVE: the lockless preview and the locked committer run in intentionally
+ * different contexts, so each keeps its own resolve (this file mirrors apt_txn.cc
+ * byte-for-byte in intent). Resolver drift is not a shared-code hazard here; it is
+ * caught at receipt redemption and fails closed, so duplicating it costs nothing
+ * the redeem gate does not already guarantee.
  *
  * Result contract (one uniform shape for every outcome; unavailable fields are
  * JSON null, but packages and records are always arrays):
