@@ -25,8 +25,8 @@ static int is_lc_hex(const char *s, size_t n) {
 }
 
 /* Broker correlation id: exactly 20 digits, '-', 16 lowercase hex. */
-static int cid_ok(const char *s) {
-    if (strlen(s) != 20 + 1 + 16) {
+int pkgx_cid_valid(const char *s) {
+    if (s == NULL || strlen(s) != 20 + 1 + 16) {
         return 0;
     }
     for (int i = 0; i < 20; i++) {
@@ -128,18 +128,19 @@ static int depth(const json_t *v) {
     return 0;
 }
 
-enum { ARITY_NONE, ARITY_ONE_PLUS, ARITY_ANY };
+enum { ARITY_NONE, ARITY_ONE_PLUS };
 static int verb_arity(const char *verb) {
-    if (strcmp(verb, "apt.update") == 0 || strcmp(verb, "apt.configure") == 0) {
+    /* update/configure take no packages; upgrade/dist_upgrade are whole-system
+     * in v1 (target-scoped upgrades are not yet implemented, so targets are
+     * rejected rather than silently ignored). */
+    if (strcmp(verb, "apt.update") == 0 || strcmp(verb, "apt.configure") == 0 ||
+        strcmp(verb, "apt.upgrade") == 0 || strcmp(verb, "apt.dist_upgrade") == 0) {
         return ARITY_NONE;
     }
     if (strcmp(verb, "apt.install") == 0 || strcmp(verb, "apt.remove") == 0 ||
         strcmp(verb, "apt.purge") == 0 || strcmp(verb, "apt.hold") == 0 ||
         strcmp(verb, "apt.unhold") == 0) {
         return ARITY_ONE_PLUS;
-    }
-    if (strcmp(verb, "apt.upgrade") == 0 || strcmp(verb, "apt.dist_upgrade") == 0) {
-        return ARITY_ANY;
     }
     return -1;
 }
@@ -165,20 +166,22 @@ int pkgx_read_stdin_deadline(int fd, char **body, size_t *len,
         *errcode = "io";
         return -1;
     }
+    /* Every failure below jumps to `fail`, which wipes the partial buffer before
+     * freeing it: a partial read can already hold the effect-receipt token, so a
+     * timeout / I/O / allocation / oversize error must never leak it to freed
+     * heap. Only a clean EOF reaches the success return with an intact buffer. */
     for (;;) {
         struct timespec now;
         if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
-            free(buf);
             *errcode = "io";
-            return -1;
+            goto fail;
         }
         long elapsed = (now.tv_sec - start.tv_sec) * 1000 +
                        (now.tv_nsec - start.tv_nsec) / 1000000;
         long remaining = deadline_ms - elapsed;
         if (remaining <= 0) {
-            free(buf);
             *errcode = "deadline";
-            return -1;
+            goto fail;
         }
         struct pollfd pfd = {.fd = fd, .events = POLLIN};
         int pr = poll(&pfd, 1, (int) remaining);
@@ -186,14 +189,12 @@ int pkgx_read_stdin_deadline(int fd, char **body, size_t *len,
             if (errno == EINTR) {
                 continue;
             }
-            free(buf);
             *errcode = "io";
-            return -1;
+            goto fail;
         }
         if (pr == 0) {
-            free(buf);
             *errcode = "deadline";
-            return -1;
+            goto fail;
         }
         if (n == cap) {
             size_t nc = cap * 2;
@@ -202,9 +203,8 @@ int pkgx_read_stdin_deadline(int fd, char **body, size_t *len,
             }
             char *nb = realloc(buf, nc + 1);
             if (nb == NULL) {
-                free(buf);
-                *errcode = "io";
-                return -1;
+                *errcode = "io"; /* buf still valid; wiped at fail */
+                goto fail;
             }
             buf = nb;
             cap = nc;
@@ -214,24 +214,26 @@ int pkgx_read_stdin_deadline(int fd, char **body, size_t *len,
             if (errno == EINTR) {
                 continue;
             }
-            free(buf);
             *errcode = "io";
-            return -1;
+            goto fail;
         }
         if (r == 0) {
             break; /* EOF */
         }
         n += (size_t) r;
         if (n > PKGX_MAX_STDIN) {
-            free(buf);
             *errcode = "too_large";
-            return -1;
+            goto fail;
         }
     }
     buf[n] = '\0';
     *body = buf;
     *len = n;
     return 0;
+fail:
+    pkgx_secure_wipe(buf, n); /* n bytes read so far may contain the receipt */
+    free(buf);
+    return -1;
 }
 
 int pkgx_read_stdin(int fd, char **body, size_t *len, const char **errcode) {
@@ -288,7 +290,7 @@ int pkgx_parse_request(const char *verb, const char *body, size_t len,
     memcpy(out->effect_receipt, rcpt, PKGX_RECEIPT_HEXLEN + 1);
 
     const char *cid = str_clean(json_object_get(root, "correlation_id"));
-    if (cid == NULL || !cid_ok(cid)) {
+    if (cid == NULL || !pkgx_cid_valid(cid)) {
         goto fail;
     }
     strcpy(out->correlation_id, cid);

@@ -183,7 +183,7 @@ int main(void) {
     }
     json_t *vectors = json_object_get(root, "vectors");
     size_t n = json_array_size(vectors);
-    CHECK(n == 13, "all 13 golden vectors present");
+    CHECK(n == 14, "all 14 golden vectors present");
     for (size_t i = 0; i < n; i++) {
         run_vector(json_array_get(vectors, i));
     }

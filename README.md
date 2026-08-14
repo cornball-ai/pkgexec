@@ -35,4 +35,6 @@ Specified in [`cornball-ai/runix`](https://github.com/cornball-ai/runix) `docs/`
 
 Build-deps: `libapt-pkg-dev`, `libjansson-dev`, `libssl-dev`, `pkg-config`.
 
-Status: pre-implementation scaffold.
+Status: activated (0.0.2). The nine per-verb effectors commit behind the redeem
+gate; proven on a disposable systemd/polkit/dpkg VM (23/23 polkit matrix, 37/37 §7
+acceptance gates).

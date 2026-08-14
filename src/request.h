@@ -14,6 +14,10 @@
 
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define PKGX_RECEIPT_HEXLEN 32   /* the 128-bit token as 32 lowercase hex */
 #define PKGX_CID_MAX 64
 #define PKGX_MAX_STDIN 65536     /* hard cap on the request bytes (64 KiB) */
@@ -47,6 +51,12 @@ int pkgx_read_stdin_deadline(int fd, char **body, size_t *len,
  * does not linger in freed memory. A no-op on NULL. */
 void pkgx_secure_wipe(void *p, size_t n);
 
+/* The broker correlation-id grammar: exactly 20 digits, '-', 16 lowercase hex.
+ * Exposed so the commit gate can revalidate a cid before it commits under it,
+ * reusing this one definition rather than trusting an upstream check. Returns 1
+ * if `s` matches, 0 otherwise (including NULL). */
+int pkgx_cid_valid(const char *s);
+
 /* Parse+validate `body` for `verb` (the entrypoint's compile-time verb, one of
  * the nine apt.* strings). Strict: rejects duplicate keys, trailing content,
  * unknown members, missing members, depth > PKGX_MAX_DEPTH, a receipt that is
@@ -59,5 +69,9 @@ int pkgx_parse_request(const char *verb, const char *body, size_t len,
                        pkgx_request *out, const char **errcode);
 
 void pkgx_request_free(pkgx_request *req);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* PKGEXEC_REQUEST_H */

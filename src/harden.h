@@ -8,6 +8,10 @@
 
 #include <sys/types.h> /* uid_t */
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Read PKEXEC_UID from the trusted (pkexec-set) environment. MUST be called
  * before pkgx_scrub_env(), which erases it. Returns 0 and sets *uid on a
  * well-formed non-negative integer that fits uid_t, -1 otherwise (absent,
@@ -30,5 +34,9 @@ int pkgx_cloexec_from(int lowest);
  * lingering request/receipt on stdin nor block on an interactive prompt.
  * Returns 0 on success, -1 on failure. */
 int pkgx_null_stdin(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* PKGEXEC_HARDEN_H */

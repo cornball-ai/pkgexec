@@ -1,9 +1,33 @@
-/* The non-committing plan step. See plan.h. */
+/* The per-mechanism plan step. See plan.h. */
 #include "plan.h"
 
 #include "policy.h"
 
 #include <stdlib.h>
+
+/* Shared redeem tail: spend the receipt bound to {verb, resource, schema, hash}
+ * and require the reply's correlation_id to equal expected_cid. resource/hash
+ * are borrowed. Returns PKGX_PLAN_OK (validated cid in out_cid) or
+ * PKGX_PLAN_NO_INTENT (*detail = the redeem code). */
+static pkgx_plan_result redeem_tail(const char *verb, const char *resource,
+                                    const char *hash, const char *effect_receipt,
+                                    uid_t principal_uid, int plan_schema,
+                                    const char *expected_cid,
+                                    pkgx_redeem_transport tx, void *ctx,
+                                    char out_cid[PKGX_CID_LEN + 1],
+                                    const char **detail) {
+    pkgx_redeem_req req = {effect_receipt, principal_uid, verb,
+                           resource,       plan_schema,   hash};
+    const char *code = "";
+    pkgx_redeem_status rs =
+        pkgx_redeem(&req, expected_cid, tx, ctx, out_cid, &code);
+    if (rs == PKGX_REDEEM_OK) {
+        *detail = "ok";
+        return PKGX_PLAN_OK;
+    }
+    *detail = code; /* refused / cid_mismatch / protocol / transport */
+    return PKGX_PLAN_NO_INTENT;
+}
 
 pkgx_plan_result pkgx_plan_and_redeem(
     const char *verb, const pkgx_txn_record *recs, size_t nrecs,
@@ -45,17 +69,97 @@ pkgx_plan_result pkgx_plan_and_redeem(
         free(resource);
         return PKGX_PLAN_INTERNAL;
     }
-
-    pkgx_redeem_req req = {effect_receipt, principal_uid, verb,
-                           resource,       plan_schema,   hash};
-    const char *code = "";
-    pkgx_redeem_status rs = pkgx_redeem(&req, expected_cid, tx, ctx, out_cid, &code);
+    pkgx_plan_result r =
+        redeem_tail(verb, resource, hash, effect_receipt, principal_uid,
+                    plan_schema, expected_cid, tx, ctx, out_cid, detail);
     free(resource);
+    return r;
+}
 
-    if (rs == PKGX_REDEEM_OK) {
-        *detail = "ok";
-        return PKGX_PLAN_OK;
+pkgx_plan_result pkgx_plan_and_redeem_update(
+    const pkgx_src_record *srcs, size_t nsrcs, const char *resource_token,
+    const char *effect_receipt, uid_t principal_uid, int plan_schema,
+    const char *expected_cid, pkgx_redeem_transport tx, void *ctx,
+    char out_cid[PKGX_CID_LEN + 1], const char **detail) {
+    *detail = "";
+    if (nsrcs == 0) {
+        *detail = "no_op";
+        return PKGX_PLAN_NO_OP;
     }
-    *detail = code; /* the redeem code (refused/cid_mismatch/protocol/transport) */
-    return PKGX_PLAN_NO_INTENT;
+    /* No package policy: a source refresh installs and removes nothing. */
+    char hash[PKGEXEC_DIGEST_HEX + 1];
+    if (pkgx_digest_update(srcs, nsrcs, hash, NULL, NULL) != 0) {
+        return PKGX_PLAN_INTERNAL;
+    }
+    const char *resource = (resource_token != NULL) ? resource_token : "";
+    return redeem_tail("apt.update", resource, hash, effect_receipt,
+                       principal_uid, plan_schema, expected_cid, tx, ctx,
+                       out_cid, detail);
+}
+
+pkgx_plan_result pkgx_plan_and_redeem_hold(
+    const char *verb, const pkgx_hold_record *holds, size_t nholds,
+    const char *const *targets, size_t ntargets, const char *effect_receipt,
+    uid_t principal_uid, int plan_schema, const char *expected_cid,
+    pkgx_redeem_transport tx, void *ctx, char out_cid[PKGX_CID_LEN + 1],
+    const char **detail) {
+    *detail = "";
+    if (nholds == 0) {
+        *detail = "no_op";
+        return PKGX_PLAN_NO_OP;
+    }
+    /* Ownership is the only policy for a selection-state change: pkgexec must
+     * never hold/unhold a rapt-owned package. Check before spending the receipt. */
+    for (size_t i = 0; i < nholds; i++) {
+        const char *nm = holds[i].package != NULL ? holds[i].package : "";
+        if (pkgx_is_rapt_owned(nm)) {
+            *detail = holds[i].package;
+            return PKGX_PLAN_NOT_OWNED;
+        }
+    }
+    char *resource = NULL;
+    if (pkgx_resource(targets, ntargets, &resource) != 0) {
+        return PKGX_PLAN_INTERNAL;
+    }
+    char hash[PKGEXEC_DIGEST_HEX + 1];
+    if (pkgx_digest_hold(verb, holds, nholds, hash, NULL, NULL) != 0) {
+        free(resource);
+        return PKGX_PLAN_INTERNAL;
+    }
+    pkgx_plan_result r =
+        redeem_tail(verb, resource, hash, effect_receipt, principal_uid,
+                    plan_schema, expected_cid, tx, ctx, out_cid, detail);
+    free(resource);
+    return r;
+}
+
+pkgx_plan_result pkgx_plan_and_redeem_configure(
+    const pkgx_cfg_record *cfgs, size_t ncfgs, const char *effect_receipt,
+    uid_t principal_uid, int plan_schema, const char *expected_cid,
+    pkgx_redeem_transport tx, void *ctx, char out_cid[PKGX_CID_LEN + 1],
+    const char **detail) {
+    *detail = "";
+    if (ncfgs == 0) {
+        *detail = "no_op";
+        return PKGX_PLAN_NO_OP;
+    }
+    /* Ownership still applies. The pending set is not selectable, but
+     * configuring an r-* package runs its maintainer scripts — a mutation of a
+     * rapt-owned package — so any rapt-owned member fails the whole configure
+     * before the receipt is spent. The post-commit broken-state check is the
+     * C++ effector's. */
+    for (size_t i = 0; i < ncfgs; i++) {
+        const char *nm = cfgs[i].package != NULL ? cfgs[i].package : "";
+        if (pkgx_is_rapt_owned(nm)) {
+            *detail = cfgs[i].package;
+            return PKGX_PLAN_NOT_OWNED;
+        }
+    }
+    char hash[PKGEXEC_DIGEST_HEX + 1];
+    if (pkgx_digest_configure(cfgs, ncfgs, hash, NULL, NULL) != 0) {
+        return PKGX_PLAN_INTERNAL;
+    }
+    return redeem_tail("apt.configure", "pending", hash, effect_receipt,
+                       principal_uid, plan_schema, expected_cid, tx, ctx,
+                       out_cid, detail);
 }

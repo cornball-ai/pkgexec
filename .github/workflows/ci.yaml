@@ -40,6 +40,12 @@ jobs:
       - name: Locked libapt resolve — link check (slice 2, not run in CI)
         run: make plan   # compile+link only; runtime takes the dpkg lock (VM-gated)
 
+      - name: Commit effectors (all four) — link check (not run in CI)
+        run: make effect  # compile+link only; commits require root+broker (VM-gated)
+
+      - name: Nine per-verb entrypoints — link check (not run in CI)
+        run: make entrypoints  # compile+link only; each bakes its verb, VM-gated runtime
+
       - name: Fuzz the request parser
         run: |
           make fuzz CC=clang
@@ -67,4 +73,19 @@ jobs:
           dpkg -L pkgexec
           test -f /usr/share/doc/pkgexec/README.md
           dpkg -L pkgexec | grep -q plan-digest-vectors   # .gz after dh_compress
+          # nine per-verb entrypoints installed and executable
+          for v in update install remove purge upgrade dist-upgrade configure hold unhold; do
+            test -x "/usr/libexec/pkgexec/runix-apt-$v"
+          done
+          test "$(ls /usr/libexec/pkgexec/runix-apt-* | wc -l)" = 9
+          # polkit action + autonomous-verb rule
+          test -f /usr/share/polkit-1/actions/ai.cornball.runix.apt.policy
+          test -f /usr/share/polkit-1/rules.d/49-runix-apt-autonomous.rules
+          # the autonomous group is created empty (no members)
+          getent group runix-apt-autonomous
+          test -z "$(getent group runix-apt-autonomous | cut -d: -f4)"
+          # an entrypoint fails closed with no PKEXEC_UID (never reaches the broker)
+          if echo '{}' | /usr/libexec/pkgexec/runix-apt-update; then
+            echo "entrypoint should fail without PKEXEC_UID"; exit 1
+          fi
           sudo dpkg -r pkgexec
