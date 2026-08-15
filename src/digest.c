@@ -151,7 +151,7 @@ static int cmp_bytewise(const void *a, const void *b) {
     return (int) *x - (int) *y;
 }
 
-static int sha256_hex(const unsigned char *data, size_t n, char out[65]) {
+int pkgx_sha256_hex(const unsigned char *data, size_t n, char out[65]) {
     unsigned char md[EVP_MAX_MD_SIZE];
     unsigned int mdlen = 0;
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
@@ -310,7 +310,7 @@ static int finalize(const char *verb, char **recs, size_t n, char out_hex[65],
         return -1;
     }
     char hex[65];
-    if (sha256_hex(b.p, b.len, hex) != 0) {
+    if (pkgx_sha256_hex(b.p, b.len, hex) != 0) {
         free(b.p);
         return -1;
     }
@@ -486,4 +486,40 @@ int pkgx_resource(const char *const *targets, size_t n, char **out) {
     }
     *out = j;
     return 0;
+}
+
+int pkgx_signed_by_inline_token(const char *value, size_t len,
+                                char token[PKGX_SIGNEDBY_TOKEN_LEN + 1]) {
+    static const char BEGIN[] = "-----BEGIN PGP PUBLIC KEY BLOCK-----";
+    static const char END[] = "-----END PGP PUBLIC KEY BLOCK-----";
+    const size_t blen = sizeof BEGIN - 1, elen = sizeof END - 1;
+    if (value == NULL || len < blen || memcmp(value, BEGIN, blen) != 0) {
+        return 0; /* not libapt's inline armored-key form: keep the original */
+    }
+    /* Require the END footer, with only trailing whitespace after it (the last
+     * occurrence, so an END-looking substring earlier cannot short-circuit it). */
+    int found = 0;
+    size_t epos = 0;
+    for (size_t i = blen; i + elen <= len; i++) {
+        if (memcmp(value + i, END, elen) == 0) {
+            found = 1;
+            epos = i;
+        }
+    }
+    if (!found) {
+        return 0; /* malformed armor (no footer): not the valid form, keep original */
+    }
+    for (size_t i = epos + elen; i < len; i++) {
+        char c = value[i];
+        if (c != '\n' && c != '\r' && c != ' ' && c != '\t') {
+            return 0; /* trailing non-whitespace: not the valid form, keep original */
+        }
+    }
+    char hex[PKGEXEC_DIGEST_HEX + 1];
+    if (pkgx_sha256_hex((const unsigned char *) value, len, hex) != 0) {
+        return -1; /* hash failure: caller keeps the original, which fails closed */
+    }
+    memcpy(token, "inline-sha256:", 14);
+    memcpy(token + 14, hex, PKGEXEC_DIGEST_HEX + 1); /* 64 hex + the NUL */
+    return 1;
 }

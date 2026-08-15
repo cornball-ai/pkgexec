@@ -83,6 +83,29 @@ int pkgx_digest_update(const pkgx_src_record *recs, size_t n,
  * caller, not this function. */
 int pkgx_resource(const char *const *targets, size_t n, char **out);
 
+/* Lowercase-hex SHA-256 of `n` bytes into out_hex (64 hex + NUL); 0 or -1.
+ * Exposed for schema-1 field normalization (pkgx_signed_by_inline_token). */
+int pkgx_sha256_hex(const unsigned char *data, size_t n,
+                    char out_hex[PKGEXEC_DIGEST_HEX + 1]);
+
+/* strlen("inline-sha256:") + 64 hex. The fixed length of the inline-key token. */
+#define PKGX_SIGNEDBY_TOKEN_LEN 78
+
+/* Schema-1 normalization of a source record's `signed-by` value for digesting
+ * (broker-effect-receipt-contract.md, "Plan digest"). libapt-pkg returns either a
+ * keyring path / fingerprint (field-safe) or an inline armored public key
+ * (multi-line, carrying '=' and newlines the field grammar forbids). If `value`
+ * (of length `len`) is libapt-pkg's valid inline armored-key form
+ * (`-----BEGIN PGP PUBLIC KEY BLOCK----- ... -----END PGP PUBLIC KEY BLOCK-----`,
+ * only trailing whitespace after the footer), write the stable token
+ * "inline-sha256:<64 lowercase hex>" of the EXACT `len` bytes to `token` and
+ * return 1. Otherwise leave `token` untouched and return 0 (the caller keeps the
+ * original value; a non-field-safe original still fails closed at digest, so an
+ * arbitrary reserved-byte value is never hashed away). Return -1 on hash failure.
+ * `token` must hold PKGX_SIGNEDBY_TOKEN_LEN + 1 bytes. */
+int pkgx_signed_by_inline_token(const char *value, size_t len,
+                                char token[PKGX_SIGNEDBY_TOKEN_LEN + 1]);
+
 #ifdef __cplusplus
 }
 #endif

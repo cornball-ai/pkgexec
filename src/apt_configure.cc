@@ -37,31 +37,6 @@
 
 namespace {
 
-/* The pending-configuration states `dpkg --configure --pending` acts on, and
- * their descriptor names. HalfInstalled (an interrupted unpack) is NOT one of
- * them: --configure --pending cannot repair it (it needs re-unpack), so it is not
- * a configure target — it is an observed blocker, handled before redemption as a
- * pre-commit BROKEN refusal (below), never encoded into the configure descriptor. */
-const char *pending_state(unsigned char cur) {
-    switch (cur) {
-    case pkgCache::State::UnPacked:
-        return "unpacked";
-    case pkgCache::State::HalfConfigured:
-        return "half-configured";
-    case pkgCache::State::TriggersAwaited:
-        return "triggers-awaited";
-    case pkgCache::State::TriggersPending:
-        return "triggers-pending";
-    default:
-        return nullptr; /* not part of the configure pass */
-    }
-}
-
-/* Stable storage for the configure records; the C records borrow these. */
-struct CfgHolder {
-    std::string package, arch, version, state;
-};
-
 struct ConfigureCommitCtx {
     std::string dpkg; /* apt-configured dpkg path (kept alive for argv) */
     bool entered;
@@ -130,39 +105,18 @@ extern "C" pkgx_apt_status pkgx_apt_configure_effect(
         return PKGX_APT_INTERNAL;
     }
 
-    /* Enumerate the pending-configuration set from the current dpkg states. A
-     * half-installed package (interrupted unpack) is unrepairable by configure:
-     * the system is already broken in a way this verb will not fix, so refuse
-     * with BROKEN before the receipt is spent — the caller must resolve the
-     * half-installed package first. Copy the name into the caller buffer (it
-     * borrows the cache, destroyed on return). */
-    std::deque<CfgHolder> holders;
-    for (pkgCache::PkgIterator P = c->PkgBegin(); !P.end(); ++P) {
-        if (P->CurrentState == pkgCache::State::HalfInstalled) {
-            pkgx_detail_set(detail, P.Name());
-            return PKGX_APT_BROKEN;
-        }
-        const char *state = pending_state(P->CurrentState);
-        if (state == nullptr) {
-            continue;
-        }
-        CfgHolder h;
-        h.package = P.Name();
-        h.arch = P.Arch();
-        pkgCache::VerIterator cur = P.CurrentVer();
-        h.version = cur.end() ? "" : cur.VerStr();
-        h.state = state;
-        holders.push_back(std::move(h));
-    }
-
+    /* Enumerate the pending-configuration set via the shared builder (the same one the
+     * read-only planner uses), so preview and commit derive an identical digest. A
+     * half-installed package is unrepairable by configure: the builder signals it and
+     * the effector refuses BROKEN before the receipt is spent, copying the name into
+     * the caller buffer while the cache is still alive. */
+    std::deque<PkgxCfgHolder> holders;
     std::vector<pkgx_cfg_record> cfgs;
-    for (auto &h : holders) {
-        pkgx_cfg_record r;
-        r.package = h.package.c_str();
-        r.architecture = h.arch.c_str();
-        r.current_version = h.version.c_str();
-        r.state = h.state.c_str();
-        cfgs.push_back(r);
+    const char *half_installed = nullptr;
+    if (pkgx_apt_map_configure(c, holders, cfgs, &half_installed) !=
+        PKGX_CFG_MAP_OK) {
+        pkgx_detail_set(detail, half_installed);
+        return PKGX_APT_BROKEN;
     }
 
     /* The offending package (ownership refusal) borrows the `holders` deque, so

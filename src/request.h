@@ -26,6 +26,7 @@ extern "C" {
 #define PKGX_MAX_DEPTH 4         /* the request is shallow */
 #define PKGX_LOCK_TIMEOUT_MAX 3600
 #define PKGX_STDIN_DEADLINE_SEC 5 /* absolute read deadline, anti-slowloris */
+#define PKGX_VERB_MAX 32          /* longest apt.* verb is 16 bytes; ample */
 
 typedef struct {
     char effect_receipt[PKGX_RECEIPT_HEXLEN + 1];
@@ -69,6 +70,30 @@ int pkgx_parse_request(const char *verb, const char *body, size_t len,
                        pkgx_request *out, const char **errcode);
 
 void pkgx_request_free(pkgx_request *req);
+
+/* The unprivileged read-only preview (runix-apt-preview) request: a distinct,
+ * receipt-free shape carrying only the plan inputs. The verb IS read from the
+ * request here (there is no compile-time entrypoint binding to protect — the
+ * preview commits nothing), but it is validated against the same nine-verb
+ * allowlist and arity as an effector request. */
+typedef struct {
+    char verb[PKGX_VERB_MAX];
+    char **packages; /* malloc'd array of malloc'd, validated names */
+    size_t npackages;
+} pkgx_preview_request;
+
+/* Parse+validate `body` as the three-key preview request
+ * {"schema_version":1,"verb":"apt.*","packages":[...]}. Strict with the SAME
+ * rules pkgx_parse_request enforces — rejects duplicate keys, trailing content,
+ * unknown members, missing members, depth > PKGX_MAX_DEPTH, bad UTF-8,
+ * schema_version != 1, an unknown verb, a package list over PKGX_MAX_PACKAGES, a
+ * name failing the strict pattern, a duplicate name, and per-verb arity. Returns
+ * 0 and fills *out (free with pkgx_preview_request_free), or -1 with *errcode
+ * ("bad_json", "schema_invalid", "unknown_request"). */
+int pkgx_parse_preview_request(const char *body, size_t len,
+                               pkgx_preview_request *out, const char **errcode);
+
+void pkgx_preview_request_free(pkgx_preview_request *req);
 
 #ifdef __cplusplus
 }

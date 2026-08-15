@@ -183,7 +183,7 @@ int main(void) {
     }
     json_t *vectors = json_object_get(root, "vectors");
     size_t n = json_array_size(vectors);
-    CHECK(n == 14, "all 14 golden vectors present");
+    CHECK(n == 15, "all 15 golden vectors present");
     for (size_t i = 0; i < n; i++) {
         run_vector(json_array_get(vectors, i));
     }
@@ -261,6 +261,49 @@ int main(void) {
         free(res);
         const char *dup[] = {"nginx", "nginx"};
         CHECK(pkgx_resource(dup, 2, &res) == -1, "resource refuses duplicate targets");
+    }
+
+    /* signed-by inline-armored-key normalization (schema-1): only libapt's valid
+     * inline form becomes inline-sha256:<hex>; every other value is kept verbatim
+     * (a non-field-safe one still fails closed at digest, never hashed away). The
+     * fixed key K (111 bytes) and its token are pinned by the update_inline_signed_by
+     * golden vector; here the token derivation itself is pinned against sha256sum. */
+    {
+        const char K[] = "-----BEGIN PGP PUBLIC KEY BLOCK-----\n"
+                         "\n"
+                         "mDMEZZZZZZ0BCADabcdef0123456789\n"
+                         "=Qw3r\n"
+                         "-----END PGP PUBLIC KEY BLOCK-----\n";
+        char tok[PKGX_SIGNEDBY_TOKEN_LEN + 1];
+        int r = pkgx_signed_by_inline_token(K, sizeof K - 1, tok);
+        CHECK(r == 1, "inline armored key is recognized");
+        CHECK(r == 1 &&
+                  strcmp(tok, "inline-sha256:f8e0d4272199bb3f484afff0acb41c9d227"
+                              "bc7b9e42edefb7bf2f58bdb48c125") == 0,
+              "inline key -> inline-sha256:<sha256 of the exact bytes>");
+
+        /* A keyring path is not inline: kept byte-for-byte (return 0). This is why
+         * the path-based update_* vectors stay byte-identical. */
+        const char *path = "/usr/share/keyrings/ubuntu-archive-keyring.gpg";
+        char t2[PKGX_SIGNEDBY_TOKEN_LEN + 1];
+        CHECK(pkgx_signed_by_inline_token(path, strlen(path), t2) == 0,
+              "keyring path is not normalized (kept byte-for-byte)");
+
+        /* Malformed armor (no END footer): not the valid form -> kept -> fails closed. */
+        const char bad_armor[] = "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nmDMEabc\n";
+        CHECK(pkgx_signed_by_inline_token(bad_armor, sizeof bad_armor - 1, t2) == 0,
+              "malformed armor (no footer) is not normalized");
+
+        /* An unsafe non-inline value carrying a reserved byte is never hashed away. */
+        const char *unsafe = "trust=me";
+        CHECK(pkgx_signed_by_inline_token(unsafe, strlen(unsafe), t2) == 0,
+              "unsafe non-inline value is not hashed (kept -> fails closed)");
+
+        /* Trailing non-whitespace after the footer is not the valid form. */
+        const char trailer[] = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nx\n"
+                               "-----END PGP PUBLIC KEY BLOCK-----junk";
+        CHECK(pkgx_signed_by_inline_token(trailer, sizeof trailer - 1, t2) == 0,
+              "trailing bytes after the footer is not the valid form");
     }
 
     json_decref(root);

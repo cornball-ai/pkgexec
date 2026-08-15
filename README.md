@@ -22,6 +22,23 @@ capability ([`runix-audit-broker`](https://github.com/cornball-ai/runix-audit-br
   plan. A missing / stale / mismatched / replayed receipt is a fail-closed
   refusal, before any effect.
 
+## The unprivileged planner (`runix-apt-preview`)
+
+A tenth binary, unlike the nine: **unprivileged, read-only, and installed on PATH**
+(`/usr/bin/runix-apt-preview`). It reads the receipt-free stdin request
+`{schema_version, verb, packages}`, opens the apt cache **without** the dpkg lock,
+and prints one strict JSON object carrying the schema-1 `resource` and `plan_hash`.
+It commits nothing (no lock, no dpkg, no fetch, no shell, no receipt), so it is safe
+to run as any user any number of times.
+
+It is the **single implementation** of the preview descriptor/digest the
+[`pkgops`](https://github.com/cornball-ai/runix) issuer previews against: it shares
+the effectors' `apt_common` descriptor builders, policy, and digest, so a matching
+cache yields the matching hash. The preview is **advisory** — the effector's atomic
+locked re-resolution at redeem stays authoritative, and any drift between preview
+and redeem fails closed (`no_intent`). Distinct from `pkgexec-plan`, the root VM
+diagnostic that holds the dpkg lock and is never installed.
+
 ## Design
 
 Specified in [`cornball-ai/runix`](https://github.com/cornball-ai/runix) `docs/`:
@@ -35,6 +52,6 @@ Specified in [`cornball-ai/runix`](https://github.com/cornball-ai/runix) `docs/`
 
 Build-deps: `libapt-pkg-dev`, `libjansson-dev`, `libssl-dev`, `pkg-config`.
 
-Status: activated (0.0.2). The nine per-verb effectors commit behind the redeem
+Status: activated (0.0.3). The nine per-verb effectors commit behind the redeem
 gate; proven on a disposable systemd/polkit/dpkg VM (23/23 polkit matrix, 37/37 §7
-acceptance gates).
+acceptance gates). Adds the unprivileged `runix-apt-preview` planner (above).

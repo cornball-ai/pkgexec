@@ -40,6 +40,17 @@ jobs:
       - name: Locked libapt resolve — link check (slice 2, not run in CI)
         run: make plan   # compile+link only; runtime takes the dpkg lock (VM-gated)
 
+      - name: Read-only planner (preview) — link check + apt-independent emit smoke
+        run: |
+          make preview
+          # the schema_invalid path returns before opening any cache, so it is
+          # deterministic in CI (no apt state, no lock). Prove the binary emits the
+          # uniform shape and exits nonzero for a non-ok/no_op status.
+          out=$(printf 'not json' | ./runix-apt-preview) || rc=$?
+          echo "$out"
+          echo "$out" | grep -q '"schema_version":1,"status":"schema_invalid"'
+          test "${rc:-0}" -ne 0
+
       - name: Commit effectors (all four) — link check (not run in CI)
         run: make effect  # compile+link only; commits require root+broker (VM-gated)
 
@@ -88,4 +99,13 @@ jobs:
           if echo '{}' | /usr/libexec/pkgexec/runix-apt-update; then
             echo "entrypoint should fail without PKEXEC_UID"; exit 1
           fi
+          # the unprivileged planner is installed on PATH and runs unprivileged
+          test -x /usr/bin/runix-apt-preview
+          # schema_invalid never opens the cache, so it is deterministic
+          si=$(printf 'not json' | runix-apt-preview) || true
+          echo "$si" | grep -q '"schema_version":1,"status":"schema_invalid"'
+          # end-to-end on the runner's real (path-signed) sources: one JSON object
+          upd=$(printf '{"schema_version":1,"verb":"apt.update","packages":[]}' | runix-apt-preview) || true
+          echo "$upd" | grep -q '"schema_version":1'
+          echo "$upd" | grep -q '"verb":"apt.update"'
           sudo dpkg -r pkgexec
