@@ -142,3 +142,15 @@ done:
     json_decref(root);
     return st;
 }
+
+/* See redeem.h. A pre-redemption / no-effect result carries the request's own
+ * (already-open) correlation_id so runix trusts the frame; a malformed cid leaves
+ * out_cid empty (never fabricated). Same length invariant as the redeem_ok copy
+ * above: a valid cid is exactly PKGX_CID_LEN chars + NUL. */
+void pkgx_cid_echo(char out_cid[PKGX_CID_LEN + 1], const char *expected_cid) {
+    if (expected_cid != NULL && strlen(expected_cid) == PKGX_CID_LEN) {
+        memcpy(out_cid, expected_cid, PKGX_CID_LEN + 1);
+    } else {
+        out_cid[0] = '\0';
+    }
+}
