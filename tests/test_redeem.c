@@ -185,6 +185,32 @@ int main(void) {
               "transport failure -> PROTOCOL(transport)");
     }
 
+    /* pkgx_cid_echo: a pre-redemption / no-effect result (a lock miss, an
+     * unsupported request, a pre-redeem internal error, a redeem refusal) carries
+     * the request's own already-open correlation_id so runix trusts the frame and
+     * classifies by status (apt_locked -> retryable) instead of discarding an
+     * empty-cid frame as effect-unknown. A malformed cid leaves out_cid EMPTY --
+     * never a fabricated cid on a genuinely-unknown or post-redemption path. */
+    {
+        char oc[PKGX_CID_LEN + 1];
+        memset(oc, 'x', sizeof oc);
+        pkgx_cid_echo(oc, CID);
+        CHECK(strcmp(oc, CID) == 0 && strlen(oc) == PKGX_CID_LEN,
+              "cid_echo: a valid request cid is echoed verbatim + NUL-terminated");
+
+        memset(oc, 'x', sizeof oc);
+        pkgx_cid_echo(oc, NULL);
+        CHECK(oc[0] == '\0', "cid_echo: NULL cid -> empty (never fabricated)");
+
+        memset(oc, 'x', sizeof oc);
+        pkgx_cid_echo(oc, "00001786382512165708-a061ec02cffe1b2"); /* 36 chars */
+        CHECK(oc[0] == '\0', "cid_echo: under-length cid -> empty");
+
+        memset(oc, 'x', sizeof oc);
+        pkgx_cid_echo(oc, CID "0"); /* 38 chars */
+        CHECK(oc[0] == '\0', "cid_echo: over-length cid -> empty");
+    }
+
     printf("%d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

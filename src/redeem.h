@@ -55,6 +55,18 @@ pkgx_redeem_status pkgx_redeem(const pkgx_redeem_req *req, const char *expected_
                                pkgx_redeem_transport tx, void *ctx,
                                char out_cid[PKGX_CID_LEN + 1], const char **code);
 
+/* Echo a caller-supplied (already-open intent) correlation_id into out_cid for a
+ * result that carries NO broker-assigned cid -- a PRE-REDEMPTION return (a lock
+ * miss, an unsupported request, a pre-redeem internal error) or a redeem refusal
+ * (no_op / policy / no_intent), all of which issue no effect. The emitted effect
+ * frame then carries the cid runix opened the intent with, so runix trusts it and
+ * classifies by status (e.g. apt_locked -> retryable) instead of discarding an
+ * empty-cid frame as an effect-unknown left-open. A NULL or wrong-length cid
+ * yields an empty out_cid (unchanged, untrusted -- never a fabricated cid). MUST
+ * NOT be called after redemption: pkgx_redeem already wrote the broker-validated
+ * cid on PKGX_REDEEM_OK and that must never be overwritten by the request's. */
+void pkgx_cid_echo(char out_cid[PKGX_CID_LEN + 1], const char *expected_cid);
+
 #ifdef __cplusplus
 }
 #endif

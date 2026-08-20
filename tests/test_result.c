@@ -104,8 +104,10 @@ int main(void) {
         json_decref(o);
     }
 
-    /* --- dpkg_broken and effect NOT issued: the half-installed pre-redeem refusal.
-     * status is broken (system found broken), but WE issued nothing. --- */
+    /* --- dpkg_broken and effect NOT issued: status is broken (system found
+     * broken), but WE issued nothing. result_json must still tolerate an empty cid;
+     * the effector now echoes the request cid on such pre-redeem refusals (see the
+     * apt_locked case below + pkgx_cid_echo in test_redeem). --- */
     o = roundtrip(PKGX_APT_BROKEN, 0, "", "half-installed-pkg");
     CHECK(o != NULL, "half-installed: encodes");
     if (o != NULL) {
@@ -121,6 +123,24 @@ int main(void) {
     CHECK(o != NULL, "no_intent: encodes");
     if (o != NULL) {
         CHECK(is_bool_eq(o, "effect_issued", 0), "no_intent: effect_issued false");
+        json_decref(o);
+    }
+
+    /* --- apt_locked: the pre-redemption lock miss. Nothing issued, and (post the
+     * pkgx_cid_echo fix) the frame carries the request's already-open cid, so runix
+     * TRUSTS it (correlation_id == its expect_cid) and classifies apt_locked ->
+     * retryable rather than discarding an empty-cid frame as an effect-unknown
+     * left-open. This is the exact frame shape the G10 gate proves end-to-end. --- */
+    o = roundtrip(PKGX_APT_LOCKED, 0, "20250101000000000000-0123456789abcdef",
+                  "apt_locked");
+    CHECK(o != NULL, "apt_locked: encodes");
+    if (o != NULL) {
+        CHECK(is_str_eq(o, "status", "apt_locked"), "apt_locked: status");
+        CHECK(is_bool_eq(o, "effect_issued", 0),
+              "apt_locked: effect_issued false (nothing ran -> retryable)");
+        CHECK(is_str_eq(o, "correlation_id",
+                        "20250101000000000000-0123456789abcdef"),
+              "apt_locked: carries the request cid (runix trusts the frame)");
         json_decref(o);
     }
 

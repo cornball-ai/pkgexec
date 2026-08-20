@@ -113,6 +113,13 @@ extern "C" pkgx_apt_status pkgx_apt_hold_effect(
     char out_cid[PKGX_CID_LEN + 1], int *effect_issued, char *detail) {
     pkgx_detail_set(detail, "");
     *effect_issued = 0; /* nothing issued until the dpkg child is spawned */
+    /* Every pre-redemption return below (a lock miss, a resolve failure, a pre-redeem
+     * internal error) and every redeem refusal issues no effect and carries no broker
+     * cid; echo the request's own (already-open intent) cid so runix trusts the frame
+     * and classifies by status (apt_locked -> retryable) instead of discarding an
+     * empty-cid frame as effect-unknown. redeem overwrites out_cid on redeem_ok, so
+     * post-redemption paths keep the broker cid. */
+    pkgx_cid_echo(out_cid, expected_cid);
     const char *err = nullptr;
     if (!pkgx_apt_init(&err)) {
         pkgx_detail_set(detail, err);
