@@ -81,6 +81,37 @@ static pkgx_plan_result plan(const pkgx_txn_record *recs, size_t n,
     return r;
 }
 
+/* A transport that always fails, for the redeem PROTOCOL(transport) path. */
+static int fail_tx(void *ctx, const char *req, size_t reqlen, char **resp,
+                   size_t *resplen) {
+    (void) ctx;
+    (void) req;
+    (void) reqlen;
+    (void) resp;
+    (void) resplen;
+    return -1;
+}
+
+/* Like plan(), but pre-seeds out_cid with a stale NON-cid sentinel (standing in
+ * for the effector's top-of-function request-cid echo) and EXPOSES the final
+ * out_cid, so a caller can assert redeem_tail's out_cid discipline: OK keeps the
+ * broker-validated cid, REFUSED re-echoes the request cid (a known no-effect
+ * refusal), and CID_MISMATCH / PROTOCOL clear it (genuinely unknown). `tx` is
+ * explicit so the transport-failure PROTOCOL path is reachable too. */
+static pkgx_plan_result plan_cid(pkgx_redeem_transport tx,
+                                 const pkgx_txn_record *recs, size_t n,
+                                 const char *const *targets, size_t nt,
+                                 const char *expected_cid, const char *reply,
+                                 const char *exp_resource, const char *exp_hash,
+                                 char out[PKGX_CID_LEN + 1]) {
+    fake_ctx f = {reply, 0, exp_resource, exp_hash};
+    const char *detail = "";
+    memset(out, 'x', PKGX_CID_LEN); /* a stale non-cid seed the tail must overwrite */
+    out[PKGX_CID_LEN] = '\0';
+    return pkgx_plan_and_redeem("apt.install", recs, n, targets, nt, RECEIPT, 1000,
+                                1, expected_cid, tx, &f, out, &detail);
+}
+
 int main(void) {
     const char *targets[] = {"nginx"};
     const char *detail = "";
@@ -138,6 +169,39 @@ int main(void) {
                   PKGX_PLAN_NO_INTENT &&
               strcmp(detail, "cid_mismatch") == 0,
           "substituted cid -> NO_INTENT(cid_mismatch)");
+
+    /* --- redeem_tail out_cid discipline. pkgx_redeem writes out_cid ONLY on OK, so
+     * the effector's pre-seeded request cid would survive a genuinely-unknown redeem
+     * unless the tail corrects it. Seed a stale non-cid and prove each outcome. --- */
+    {
+        char out[PKGX_CID_LEN + 1];
+        /* OK: out carries the broker-validated cid (redeem wrote it, tail kept it). */
+        CHECK(plan_cid(fake_tx, clean, 1, targets, 1, CID, REDEEM_OK, exp_resource,
+                       exp_hash, out) == PKGX_PLAN_OK &&
+                  strcmp(out, CID) == 0,
+              "redeem OK -> out_cid = broker-validated cid");
+        /* REFUSED: a KNOWN no-effect refusal -> re-echo the request cid. */
+        CHECK(plan_cid(fake_tx, clean, 1, targets, 1, CID,
+                       "{\"error\":\"receipt_invalid\",\"message\":\"x\",\"ok\":false}",
+                       exp_resource, exp_hash, out) == PKGX_PLAN_NO_INTENT &&
+                  strcmp(out, CID) == 0,
+              "redeem REFUSED -> out_cid re-echoed (known no-effect refusal)");
+        /* CID_MISMATCH: the broker matched a DIFFERENT intent -> UNKNOWN, cleared. */
+        CHECK(plan_cid(fake_tx, clean, 1, targets, 1,
+                       "00000000000000000000-0000000000000000", REDEEM_OK,
+                       exp_resource, exp_hash, out) == PKGX_PLAN_NO_INTENT &&
+                  out[0] == '\0',
+              "redeem CID_MISMATCH -> out_cid CLEARED (unknown, never fabricated)");
+        /* PROTOCOL (malformed reply): UNKNOWN, cleared. */
+        CHECK(plan_cid(fake_tx, clean, 1, targets, 1, CID, "not json", exp_resource,
+                       exp_hash, out) == PKGX_PLAN_NO_INTENT && out[0] == '\0',
+              "redeem PROTOCOL(malformed) -> out_cid CLEARED (unknown)");
+        /* PROTOCOL (transport failure): a lost reply may hide an effect that WAS
+         * issued, so it must stay unknown -> cleared. */
+        CHECK(plan_cid(fail_tx, clean, 1, targets, 1, CID, "", exp_resource, exp_hash,
+                       out) == PKGX_PLAN_NO_INTENT && out[0] == '\0',
+              "redeem PROTOCOL(transport) -> out_cid CLEARED (unknown)");
+    }
 
     free(exp_resource);
     printf("%d checks, %d failures\n", checks, failures);

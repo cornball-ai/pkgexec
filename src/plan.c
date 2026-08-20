@@ -23,9 +23,25 @@ static pkgx_plan_result redeem_tail(const char *verb, const char *resource,
         pkgx_redeem(&req, expected_cid, tx, ctx, out_cid, &code);
     if (rs == PKGX_REDEEM_OK) {
         *detail = "ok";
-        return PKGX_PLAN_OK;
+        return PKGX_PLAN_OK; /* out_cid = the broker-validated cid (redeem set it) */
     }
     *detail = code; /* refused / cid_mismatch / protocol / transport */
+    /* out_cid discipline for a NON-OK redeem. pkgx_redeem writes out_cid ONLY on
+     * REDEEM_OK, and the effector pre-seeded it with the request cid for its
+     * pre-redemption returns, so a stale echo would survive here unless corrected:
+     *   - REFUSED: the broker DEFINITIVELY rejected the receipt -> a KNOWN no-effect
+     *     outcome over the open intent. Re-echo the request cid so runix trusts the
+     *     no_intent frame and can reconcile the (still-open) intent.
+     *   - CID_MISMATCH / PROTOCOL (a mismatched cid, a malformed reply, or a
+     *     transport failure): GENUINELY UNKNOWN -- a lost reply may hide an effect
+     *     that WAS issued, and a mismatched cid is an integrity anomaly. Clear
+     *     out_cid so runix rejects the frame (cid != its expect_cid) and leaves the
+     *     intent effect-unknown, never a trusted known result. */
+    if (rs == PKGX_REDEEM_REFUSED) {
+        pkgx_cid_echo(out_cid, expected_cid);
+    } else {
+        out_cid[0] = '\0';
+    }
     return PKGX_PLAN_NO_INTENT;
 }
 

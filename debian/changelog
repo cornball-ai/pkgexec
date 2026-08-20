@@ -9,11 +9,17 @@ pkgexec (0.0.4) unstable; urgency=medium
     effect-unknown left-open instead of its true status. A contended apt.update was
     reported as "don't know if it ran" rather than the retryable apt_locked. Each
     effector now calls pkgx_cid_echo(out_cid, expected_cid) up front, so a
-    no-effect result carries the already-open request cid and runix trusts it;
-    redeem still overwrites out_cid on redeem_ok, so post-redemption paths keep the
-    broker-validated cid and a genuinely-unknown or post-redemption failure is
-    never given a fabricated cid. (Surfaced by the disposable-VM G10 gate once the
-    runix empty-resource fix let apt.update reach the helper under contention.)
+    no-effect result carries the already-open request cid and runix trusts it.
+    The redeem tail then disciplines out_cid by the redeem outcome, because
+    pkgx_redeem writes it ONLY on redeem_ok: a broker REFUSED (a known no-effect
+    receipt rejection) re-echoes the request cid; a CID_MISMATCH or a
+    PROTOCOL/transport failure is genuinely UNKNOWN -- a lost reply may hide an
+    effect that was issued, a mismatched cid is an integrity anomaly -- so out_cid
+    is CLEARED and runix keeps the intent effect-unknown rather than trusting a
+    fabricated cid. redeem_ok still carries the broker-validated cid. (Surfaced by
+    the disposable-VM G10 gate once the runix empty-resource fix let apt.update
+    reach the helper under contention; the redeem-outcome discipline was added on
+    review.)
 
  -- Troy Hernandez <troy@cornball.ai>  Thu, 20 Aug 2026 12:22:29 -0500
 
